@@ -72,9 +72,23 @@ test("Forge v2 planner accepts only bounded ordered tasks", () => {
   assert.equal(plan.tasks.length, 2);
   assert.deepEqual(plan.tasks[1].depends_on, ["foundation"]);
 
-  assert.throws(() => __testables.validateTaskPlan({
-    tasks: [{ id: "bad", title: "Bad", objective: "Bad dependency", scope_hint: ["src"], acceptance_criteria: ["Done"], depends_on: ["future"] }],
-  }, "Bad plan", 4), /earlier task/i);
+  // Non-safety fields are repaired rather than rejected so a small local model
+  // is not blocked by bookkeeping. Task order, not depends_on, drives execution.
+  const repaired = __testables.validateTaskPlan({
+    tasks: [
+      "not an object",
+      { title: "Create the module", scope_hint: ["src/mod.ts", "../escape.ts"], depends_on: ["future"] },
+      { objective: "Wire the module into the entry point. It must build." },
+    ],
+  }, "Bad plan", 4);
+  assert.equal(repaired.tasks.length, 2);
+  assert.deepEqual(repaired.tasks[0].depends_on, []);
+  assert.deepEqual(repaired.tasks[0].scope_hint, ["src/mod.ts"]);
+  assert.equal(repaired.tasks[0].acceptance_criteria.length, 1);
+  assert.equal(repaired.tasks[1].title, "Wire the module into the entry point.");
+
+  assert.throws(() => __testables.validateTaskPlan({ tasks: ["nonsense", 5] }, "Bad plan", 4), /no usable task/i);
+  assert.throws(() => __testables.validateTaskPlan({ tasks: [] }, "Bad plan", 4), /at least one task/i);
 });
 
 test("Forge v2 Apply requests cannot silently widen the write set", () => {

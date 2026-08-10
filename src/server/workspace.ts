@@ -7,6 +7,7 @@ import type { TreeNode, WorkspaceFile } from "../shared/types.js";
 const IGNORED_SEGMENTS = new Set([
   ".git",
   ".forge",
+  ".ai-forge",
   ".cache",
   ".next",
   "discussion",

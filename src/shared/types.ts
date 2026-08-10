@@ -46,6 +46,46 @@ export interface ProjectCheckResult {
   output: string;
 }
 
+export type ContextProfileName = "tiny" | "small" | "balanced" | "large";
+
+export interface ContextBudget {
+  contextTokens: number;
+  plannerPrompt: number;
+  retrievalPrompt: number;
+  gatherEvidence: number;
+  applyTarget: number;
+  supplementalEvidence: number;
+  diagnostics: number;
+  contextPack: number;
+  wholeFileRewriteLimit: number;
+  evidenceRegions: number;
+  maxTasks: number;
+  maxChangesPerBrief: number;
+}
+
+export interface ContextStoreConfig {
+  version: 1;
+  profile: ContextProfileName;
+  contextTokens: number;
+  perChangeApply: boolean;
+  editBlocks: boolean;
+  updatedAt: string;
+}
+
+export interface ContextStoreSummary {
+  root: string;
+  workspace: string;
+  config: ContextStoreConfig;
+  budget: ContextBudget;
+  projectCardChars: number;
+  indexedSnapshotId?: string;
+  indexedAt?: string;
+  directoryCards: number;
+  fileDigests: number;
+  notes: number;
+  journals: number;
+}
+
 export type ChangeOperation = "create" | "modify" | "delete";
 
 export interface ExecutionBrief {

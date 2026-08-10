@@ -5,6 +5,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import express, { type Express } from "express";
 import type { AgentDecisionRequest, AgentRunRequest, ChatRequest, ProviderConfig } from "../shared/types.js";
 import { recoverInterruptedPromotions, resumeAgentLoop, runAgentLoop, runAgentLoopV2 } from "./agent.js";
+import {
+  buildContextPack,
+  ensureContextStore,
+  ensureProjectCard,
+  refreshProjectIndex,
+  saveStoreConfig,
+  summarizeStore,
+} from "./context-store.js";
+import { CONTEXT_PROFILE_TOKENS, isContextProfileName } from "./model-profile.js";
 import { chatWithLocalModel, discoverLocalRuntimes, listLocalModels } from "./providers.js";
 import { listRunManifests, readRunManifest, recoverInterruptedRuns } from "./run-store.js";
 import { readProjectScripts, readWorkspaceStatus, runProjectCheck, searchWorkspace } from "./workbench.js";
@@ -135,6 +144,67 @@ export async function createApiApp(): Promise<Express> {
     } catch (error) {
       finished = true;
       if (!response.writableEnded) response.status(400).json({ error: errorMessage(error) });
+    }
+  });
+
+  app.get("/api/context", async (_request, response) => {
+    try {
+      response.json(await summarizeStore());
+    } catch (error) {
+      response.status(500).json({ error: errorMessage(error) });
+    }
+  });
+
+  app.post("/api/context/refresh", async (_request, response) => {
+    try {
+      await ensureContextStore();
+      const snapshot = await createSnapshot();
+      const index = await refreshProjectIndex(snapshot);
+      await ensureProjectCard(snapshot, index);
+      response.json({ snapshotId: snapshot.id, ...(await summarizeStore()) });
+    } catch (error) {
+      response.status(500).json({ error: errorMessage(error) });
+    }
+  });
+
+  app.post("/api/context/pack", async (request, response) => {
+    try {
+      const body = request.body as Record<string, unknown>;
+      const taskText = typeof body.task === "string" ? body.task : "";
+      if (!taskText.trim()) {
+        response.status(400).json({ error: "A task description is required to build a context pack." });
+        return;
+      }
+      const summary = await summarizeStore();
+      const budgetChars = typeof body.budgetChars === "number" && body.budgetChars > 0
+        ? Math.min(Math.floor(body.budgetChars), summary.budget.plannerPrompt)
+        : summary.budget.contextPack;
+      const focusPaths = Array.isArray(body.focusPaths)
+        ? body.focusPaths.filter((item): item is string => typeof item === "string").slice(0, 12)
+        : [];
+      const pack = await buildContextPack({ taskText, budgetChars, focusPaths });
+      response.json({ pack, chars: pack.length, budgetChars });
+    } catch (error) {
+      response.status(500).json({ error: errorMessage(error) });
+    }
+  });
+
+  app.put("/api/context/config", async (request, response) => {
+    try {
+      const body = request.body as Record<string, unknown>;
+      if (body.profile !== undefined && !isContextProfileName(body.profile)) {
+        response.status(400).json({ error: `profile must be one of ${Object.keys(CONTEXT_PROFILE_TOKENS).join(", ")}.` });
+        return;
+      }
+      await saveStoreConfig({
+        profile: isContextProfileName(body.profile) ? body.profile : undefined,
+        contextTokens: typeof body.contextTokens === "number" ? body.contextTokens : undefined,
+        perChangeApply: typeof body.perChangeApply === "boolean" ? body.perChangeApply : undefined,
+        editBlocks: typeof body.editBlocks === "boolean" ? body.editBlocks : undefined,
+      });
+      response.json(await summarizeStore());
+    } catch (error) {
+      response.status(400).json({ error: errorMessage(error) });
     }
   });
 

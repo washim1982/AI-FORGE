@@ -4,6 +4,7 @@ dist-server/
 release/
 vendor/
 .forge/
+.ai-forge/
 extensions/forge-agent/out/
 extensions/forge-agent/server/
 *.vsix

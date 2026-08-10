@@ -19,6 +19,97 @@ Forge v2 is a native Windows coding-assistant IDE for local/open-weight models. 
 - Classified repair: fast Apply-only repair for syntax/type/lint failures and deep Gather/Apply repair for other failures.
 - Persistent run manifests in `.forge/runs/`, safe suspend/resume/discard controls, and final aggregate verification across completed tasks.
 - High-risk plans stop for human review. `discussion` directories are excluded from browsing, retrieval, staging, and mutation.
+- A per-workspace context store at `.ai-forge/` and a context budget that sizes every prompt, so the loop runs on a small local model. See [Working with small local models](#working-with-small-local-models).
+
+## Working with small local models
+
+Forge is built for open-weight models running on your own machine, including
+ones with a 4k–8k context window. Three mechanisms make that workable on a
+repository that does not fit in any prompt.
+
+### A workspace context store at `.ai-forge/`
+
+Forge keeps its durable understanding of the open workspace as many small files
+under `<workspace>/.ai-forge/`. Each file is small enough to drop straight into
+a prompt, so the agent selects a few thousand characters of relevant context
+instead of pasting a repository-scale file map.
+
+```text
+.ai-forge/
+  config.json      context profile and budgets for this workspace
+  project.md       the project card: stack, manifests, checks, main areas
+  map/index.json   directory rollup
+  map/<dir>.md     one card per module, listing files and their symbols
+  files/<file>.json   per-file digest: hash, size, lines, symbols, imports
+  notes/<note>.md  durable decisions, conventions, and past failures
+  tasks/<run>.md   one compact journal per agent run
+```
+
+The folder follows the selected workspace, is excluded from snapshots,
+retrieval, staging, and mutation, and is derived data throughout — deleting it
+loses accumulated learnings but never source code. `project.md` is yours to
+edit; Forge only writes it when it is missing.
+
+`.ai-forge/` is knowledge about the workspace. It is separate from `.forge/`,
+which holds transaction machinery: run manifests, promotion journals, and the
+audit log. Both are per-workspace and both are gitignored by default.
+
+After every promoted task Forge refreshes the digests for the changed files and
+appends what it learned, so the next task — and the next run — start from
+accumulated knowledge.
+
+### A context budget instead of fixed prompt sizes
+
+`.ai-forge/config.json` sets the profile for the workspace:
+
+```json
+{ "profile": "small", "contextTokens": 8192, "perChangeApply": true, "editBlocks": true }
+```
+
+Profiles are `tiny` (4k), `small` (8k), `balanced` (32k), and `large` (128k), or
+set `contextTokens` directly. Every prompt the loop builds — planner, retrieval,
+evidence, Apply targets, repair diagnostics — is sized from that number, so
+nothing silently overflows the window and gets truncated mid-JSON.
+
+### One bounded request per change, and anchored edits for large files
+
+Apply runs one model request per declared change rather than one request for the
+whole write set. A file within the rewrite allowance is returned whole; anything
+larger is edited through anchored search/replace blocks against a numbered,
+windowed view of the file:
+
+```json
+{"status":"edits","edits":[{"start_line":4,"find":"  return a - b;","replace":"  return a + b;"}]}
+```
+
+Forge applies the blocks itself. An anchor that does not resolve to exactly one
+place is rejected rather than guessed at, and the model gets one correction
+attempt with the closest matching region quoted back to it. This is what lets a
+3B model change a 500-line file it could never re-emit.
+
+Set `perChangeApply: false` to return to a single request for the whole write
+set; that is only worth doing on a large context window.
+
+Forge also repairs, deterministically and only where unambiguous, the output
+slips small models make most: a file name printed as the first line, a markdown
+fence wrapped around the body, line numbers copied back into an anchor, and a
+path pasted with its `:12-40` line range. Orchestrator-owned bookkeeping — the
+snapshot id, the brief version, evidence id echoes — is filled in rather than
+demanded back. The gates that matter are unchanged: path safety, preimage
+hashes, evidence CAS, write-set enforcement, isolated staging, and verification.
+
+Export `FORGE_DEBUG_APPLY=1` to print what a model actually returned whenever an
+Apply response is rejected. It is the fastest way to tell whether a new model is
+usable.
+
+### Inspecting and configuring the store
+
+```text
+GET  /api/context            store summary, profile, and resolved budgets
+POST /api/context/refresh    re-index the workspace into .ai-forge
+POST /api/context/pack       preview the context pack for a task
+PUT  /api/context/config     set profile, contextTokens, perChangeApply, editBlocks
+```
 
 ## Code-OSS Windows application
 
@@ -150,6 +241,12 @@ npm run code-oss:installer
 
 In a staged candidate workspace, Forge runs recognized trusted scripts in this order when present: `typecheck`, `lint`, `test`, and `build`. Commands suggested by a model are recorded in the brief but are never executed automatically.
 
+Every changed `.json` file is parsed and every changed `.js`, `.mjs`, or `.cjs`
+file is passed through `node --check` before any script runs. In a workspace
+that has no trusted script yet — a project being created from scratch — that
+parse gate is the only automatic check there is, and Forge says so in the
+verification result rather than reporting that everything passed.
+
 ## Safety model
 
 ```text
@@ -160,3 +257,18 @@ task → bounded plan → task queue → fresh snapshot/Gather → validate brie
 ```
 
 The source workspace remains untouched when a model response is invalid, a preimage is stale, a mutation escapes its declared write set, or staged verification fails. External MCP mutation is intentionally not part of this P0 implementation.
+
+### What a single task is judged on
+
+A task is judged on whether it *introduces* a failure, not on whether the whole
+workspace is green. Building a project takes several tasks, and an intermediate
+step can legitimately leave a trusted script red — a test script committed
+before the tests it runs, for example. So a script is not held against a task
+when it was already failing beforehand, or when the task is what introduced the
+script: a check that did not exist cannot have regressed. Forge reports this as
+"Failure is not a regression" rather than as a pass.
+
+Two things bound that leniency. Static checks on the changed files themselves
+are never excused. And the run cannot complete until aggregate verification
+passes over the combined result; if it does not, Forge spends its remaining
+replan budget on a bounded repair task and then suspends for a human decision.
