@@ -41,6 +41,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   outline: 1px solid var(--purple);
   outline-offset: 1px;
 }
+select option { 
+  background: var(--window); 
+  color: var(--text); 
+  border-radius: 6px; 
+  padding: 4px;
+}
 
 button { border: 0; background: none; cursor: pointer; }
 
@@ -115,8 +121,26 @@ button { border: 0; background: none; cursor: pointer; }
 .desktop-window-controls button.close:hover { background: #c42b3a; }
 .desktop-window-controls svg { width: 13px; height: 13px; stroke-width: 1.5; }
 
-.workbench { min-height: 0; display: flex; background: var(--surface); }
+.workbench {
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+  display: flex;
+  background: var(--bg);
+  padding: 5px;
+}
 
+.sidebar-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #17161b;
+  border-radius: 12px;
+  border: 1px solid var(--border-soft);
+  margin-right: 5px;
+  overflow: hidden;
+}
 .activity-rail {
   width: 54px;
   flex: 0 0 54px;
@@ -179,8 +203,16 @@ button { border: 0; background: none; cursor: pointer; }
 .explorer-footer div { height: 27px; display: flex; align-items: center; gap: 5px; padding: 0 10px; color: #9b97a2; font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; }
 .explorer-footer svg { width: 12px; }
 
-.editor-pane { flex: 1 1 auto; min-width: 320px; display: grid; grid-template-rows: 43px 34px minmax(0, 1fr); background: #121116; }
-
+.editor-pane {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-rows: 43px 34px minmax(0, 1fr);
+  background: #121116;
+  border-radius: 12px;
+  border: 1px solid var(--border-soft);
+  overflow: hidden;
+}
 /* Column dividers. The hit area is wider than the visible line so the handle is
    comfortable to grab; the line itself only appears on hover, drag, or focus. */
 .panel-resizer {
@@ -188,7 +220,7 @@ button { border: 0; background: none; cursor: pointer; }
   width: 6px;
   position: relative;
   z-index: 3;
-  margin: 0 -3px;
+  margin: 0 0.5px 0 -5.5px;
   cursor: col-resize;
   touch-action: none;
   background: transparent;
@@ -245,7 +277,7 @@ body.is-resizing-columns * { cursor: col-resize !important; }
 .float-icon { animation: float 2s ease-in-out infinite; }
 @keyframes float { 50% { transform: translateY(-6px); } }
 
-.agent-panel { width: 390px; flex: 0 0 390px; min-width: 320px; display: grid; grid-template-rows: 43px 31px minmax(0,1fr) auto auto; background: #17161b; border-left: 1px solid #26242c; }
+.agent-panel { width: 390px; flex: 0 0 390px; min-width: 320px; display: grid; grid-template-rows: 43px 31px minmax(0,1fr) auto auto; background: #17161b; border-radius: 12px; border: 1px solid var(--border-soft); margin-left: 5px; overflow: hidden; }
 .agent-header { display: flex; align-items: stretch; justify-content: space-between; border-bottom: 1px solid #24222a; }
 .session-tab { position: relative; display: flex; align-items: center; gap: 8px; padding: 0 12px; color: #ded9e5; font-size: 12px; }
 .session-tab::before { content: ""; position: absolute; left: 0; top: 0; right: 0; height: 1px; background: var(--purple); }
@@ -313,7 +345,7 @@ body.is-resizing-columns * { cursor: col-resize !important; }
 .suspension-actions button.danger { color: #e7a3aa; border-color: #59343b; background: #321f24; }
 
 .composer-wrap { padding: 0 12px 10px; }
-.composer { border: 1px solid #383440; border-radius: 13px; background: #1e1c23; box-shadow: 0 8px 35px rgba(0,0,0,.22); overflow: hidden; transition: border .15s, box-shadow .15s; }
+.composer { border: 1px solid #383440; border-radius: 13px; background: #1e1c23; box-shadow: 0 8px 35px rgba(0,0,0,.22); transition: border .15s, box-shadow .15s; }
 .composer:focus-within { border-color: #624379; box-shadow: 0 8px 35px rgba(0,0,0,.26), 0 0 0 1px rgba(177,106,231,.08); }
 .composer textarea { width: 100%; min-height: 70px; max-height: 150px; display: block; resize: none; padding: 12px 12px 4px; border: 0; outline: 0; color: #e3dfe7; background: transparent; font-size: 11px; line-height: 1.5; }
 .composer textarea::placeholder { color: #716d78; }
@@ -323,7 +355,7 @@ body.is-resizing-columns * { cursor: col-resize !important; }
 .runtime-dot.online { background: var(--green); box-shadow: 0 0 0 3px rgba(112,215,167,.1); }
 .runtime-dot.offline { background: #8f5960; }
 .provider-switch > svg:first-of-type { width: 13px; color: #a272c3; }
-.provider-switch select { appearance: none; width: auto; max-width: 78px; padding: 0; border: 0; outline: 0; color: #aaa5b0; background: transparent; font-size: 9.5px; cursor: pointer; }
+.provider-switch select, .provider-switch .custom-dropdown { appearance: none; width: auto; padding: 0; border: 0; outline: 0; color: #aaa5b0; background: transparent; font-size: 9.5px; cursor: pointer; }
 .provider-switch > svg:nth-of-type(2) { width: 9px; margin-left: -4px; }
 .model-name { max-width: 105px; margin-left: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #64606a; font-size: 8.5px; }
 .send-button { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 9px; background: #3b3740; color: #77727e; }
@@ -449,8 +481,102 @@ body.is-resizing-columns * { cursor: col-resize !important; }
 .provider-switch { flex: 1; }
 .provider-switch > svg { flex: 0 0 auto; }
 .provider-switch select { max-width: 70px; }
-.provider-switch .model-select { min-width: 64px; max-width: 105px; margin-left: 2px; color: #89828e; }
-.agent-mode-select { max-width: 67px; padding: 0; border: 0; outline: 0; color: #aca5b2; background: transparent; font-size: 9px; }
+.provider-switch .model-dropdown { min-width: 64px; margin-left: 2px; }
+.agent-mode-dropdown { max-width: 100px; }
+
+/* Custom Dropdown Component */
+.custom-dropdown {
+  position: relative;
+  display: inline-block;
+}
+.custom-dropdown.disabled { opacity: 0.6; pointer-events: none; }
+.dropdown-trigger {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  color: #aca5b2;
+  border: 0;
+  padding: 2px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 9px;
+  white-space: nowrap;
+}
+.dropdown-trigger:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #d1cbd5;
+}
+.dropdown-menu {
+  position: absolute;
+  z-index: 100;
+  background: #1e1b24;
+  border: 1px solid #332d3b;
+  border-radius: 12px;
+  padding: 6px;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+  animation: dropdown-fade-in 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes dropdown-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.dropdown-menu.align-left { left: 0; top: 100%; margin-top: 6px; }
+.dropdown-menu.align-right { right: 0; top: 100%; margin-top: 6px; }
+.dropdown-menu.align-top { left: 0; bottom: 100%; margin-bottom: 6px; transform-origin: bottom left; }
+.dropdown-menu.align-top-right { right: 0; bottom: 100%; margin-bottom: 6px; transform-origin: bottom right; }
+@keyframes dropdown-fade-in-top {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.dropdown-menu.align-top, .dropdown-menu.align-top-right { animation: dropdown-fade-in-top 0.15s cubic-bezier(0.16, 1, 0.3, 1); }
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: transparent;
+  color: #a49ea9;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.dropdown-item:hover {
+  background: #2a2531;
+  color: #fff;
+}
+.dropdown-item.selected {
+  background: rgba(185, 120, 255, 0.1);
+  color: #d4bfff;
+}
+.item-icon-space {
+  width: 14px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.item-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.item-label {
+  font-size: 11px;
+  font-weight: 500;
+}
+.item-description {
+  font-size: 9.5px;
+  color: #857e8d;
+}
+.dropdown-item:hover .item-description {
+  color: #a49ea9;
+}
 
 .chat-timeline { display: grid; gap: 9px; }
 .chat-message { border: 1px solid #302d36; border-radius: 9px; background: #1c1a20; }

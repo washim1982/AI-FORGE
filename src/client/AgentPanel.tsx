@@ -27,6 +27,7 @@ import {
 import MarkdownIt from "markdown-it";
 import type { AgentEvent, ForgeRunManifest, ProviderConfig, ProviderKind, RuntimeStatus } from "../shared/types";
 import { fetchAgentRuns } from "./api";
+import { Dropdown } from "./Dropdown";
 
 export interface ForgeChatMessage {
   id: string;
@@ -270,20 +271,40 @@ export function AgentPanel({
             <div className="provider-switch">
               <button className="runtime-refresh" onClick={onRefreshModels} title="Refresh local models"><span className={`runtime-dot ${runtime?.reachable && runtime.models.length ? "online" : "offline"}`} /><RefreshCw /></button>
               <Bot />
-              <select value={config.kind} onChange={(event) => onProviderChange(event.target.value as ProviderKind)}>
-                <option value="ollama">Ollama</option>
-                <option value="lmstudio">LM Studio</option>
-                <option value="llamacpp">llama.cpp</option>
-              </select>
-              <select className="model-select" aria-label="Local model" value={config.model} onChange={(event) => onModelChange(event.target.value)} disabled={!runtime?.models.length}>
-                {!runtime?.models.length && <option value="">{runtime?.reachable ? "No models" : "Runtime offline"}</option>}
-                {runtime?.models.map((model) => <option key={model} value={model}>{model}</option>)}
-              </select>
+              <Dropdown 
+                value={config.kind} 
+                onChange={(value) => onProviderChange(value as ProviderKind)}
+                options={[
+                  { value: "ollama", label: "Ollama" },
+                  { value: "lmstudio", label: "LM Studio" },
+                  { value: "llamacpp", label: "llama.cpp" }
+                ]}
+                className="provider-dropdown"
+                align="top"
+              />
+              <Dropdown 
+                value={config.model}
+                onChange={onModelChange}
+                disabled={!runtime?.models.length}
+                options={!runtime?.models.length 
+                  ? [{ value: "", label: runtime?.reachable ? "No models" : "Runtime offline" }]
+                  : runtime.models.map(m => ({ value: m, label: m }))
+                }
+                className="model-dropdown"
+                align="top"
+              />
             </div>
-            <select className="agent-mode-select" aria-label="Forge mode" value={mode} onChange={(event) => onModeChange(event.target.value as "chat" | "agent")} disabled={running}>
-              <option value="chat">Chat</option>
-              <option value="agent">Agent v2</option>
-            </select>
+            <Dropdown
+              value={mode}
+              onChange={(value) => onModeChange(value as "chat" | "agent")}
+              disabled={running}
+              options={[
+                { value: "chat", label: "Chat", description: "conversation only" },
+                { value: "agent", label: "Agent v2", description: "transactional agent" }
+              ]}
+              className="agent-mode-dropdown"
+              align="top-right"
+            />
             <button
               className={`send-button ${task.trim() ? "enabled" : ""}`}
               disabled={(!task.trim() || !config.model) && !running}

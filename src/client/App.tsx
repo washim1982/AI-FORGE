@@ -677,7 +677,7 @@ export default function App() {
         </header>
 
         <div className="workbench">
-          <div className="sidebar-container" style={{ display: "flex", flexDirection: "column", height: "100%", background: "#17161b", borderRight: !explorerOpen ? "none" : "1px solid var(--border-soft)" }}>
+          <div className="sidebar-container">
             <div className="sidebar-body" style={{ display: "flex", flex: 1, minHeight: 0 }}>
               <nav className="activity-rail">
                 <button className="brand-mark" title="Forge agent" onClick={() => setAgentOpen(true)}><img src={forgeIconUrl} alt="" /></button>
