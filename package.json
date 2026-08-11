@@ -23,6 +23,7 @@
     "dist:win": "npm run build && electron-builder --win",
     "build": "npm run typecheck && npm run build:server && npm run build:forge-extension && vite build",
     "build:forge-extension": "node scripts/build-forge-extension.mjs",
+    "icons": "electron scripts/generate-icons.cjs",
     "build:server": "tsc -p tsconfig.server.json",
     "typecheck": "tsc --noEmit && tsc --noEmit -p extensions/forge-agent/tsconfig.json",
     "test": "tsx --test src/server/*.test.ts",
@@ -44,10 +45,13 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "express": "^5.1.0",
     "lucide-react": "^0.468.0",
     "markdown-it": "^14.3.0",
     "monaco-editor": "^0.52.2",
+    "node-pty": "^1.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

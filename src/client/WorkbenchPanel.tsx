@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import {
   Blocks,
   CheckCircle2,
@@ -26,7 +26,15 @@ interface WorkbenchPanelProps {
   onOpenWorkspace?: () => void;
   onOpenSettings: () => void;
   onStatus: (status: WorkspaceStatus) => void;
+  /** Column width chosen by the user; omitted falls back to the CSS default. */
+  width?: number;
 }
+
+/**
+ * Width is threaded through context so every view's shell honours the column
+ * the user dragged, without each view having to pass it along.
+ */
+const PanelWidthContext = createContext<number | undefined>(undefined);
 
 function PanelShell({ title, icon, actions, children }: {
   title: string;
@@ -34,8 +42,9 @@ function PanelShell({ title, icon, actions, children }: {
   actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  const width = useContext(PanelWidthContext);
   return (
-    <aside className="workbench-panel">
+    <aside className="workbench-panel" style={width ? { width, flex: `0 0 ${width}px` } : undefined}>
       <div className="section-eyebrow">{title}</div>
       <div className="workbench-panel-heading"><span>{icon}{title}</span>{actions}</div>
       <div className="workbench-panel-body">{children}</div>
@@ -185,10 +194,15 @@ function SecurityView() {
 }
 
 export function WorkbenchPanel(props: WorkbenchPanelProps) {
-  if (props.view === "explorer") return <Explorer nodes={props.nodes} activePath={props.activePath} rootName={props.rootName} onOpen={props.onOpen} onRefresh={props.onRefreshTree} onOpenWorkspace={props.onOpenWorkspace} />;
-  if (props.view === "search") return <SearchView onOpen={props.onOpen} />;
-  if (props.view === "source") return <SourceView onOpen={props.onOpen} onStatus={props.onStatus} />;
-  if (props.view === "run") return <RunView />;
-  if (props.view === "extensions") return <ExtensionsView onOpenSettings={props.onOpenSettings} />;
-  return <SecurityView />;
+  return (
+    <PanelWidthContext.Provider value={props.width}>
+      {props.view === "explorer"
+        ? <Explorer nodes={props.nodes} activePath={props.activePath} rootName={props.rootName} onOpen={props.onOpen} onRefresh={props.onRefreshTree} onOpenWorkspace={props.onOpenWorkspace} width={props.width} />
+        : props.view === "search" ? <SearchView onOpen={props.onOpen} />
+        : props.view === "source" ? <SourceView onOpen={props.onOpen} onStatus={props.onStatus} />
+        : props.view === "run" ? <RunView />
+        : props.view === "extensions" ? <ExtensionsView onOpenSettings={props.onOpenSettings} />
+        : <SecurityView />}
+    </PanelWidthContext.Provider>
+  );
 }

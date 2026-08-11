@@ -1,3 +1,5 @@
+@import "@xterm/xterm/css/xterm.css";
+
 :root {
   color-scheme: dark;
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -126,7 +128,9 @@ button { border: 0; background: none; cursor: pointer; }
 }
 
 .brand-mark { width: 54px; height: 57px; display: grid; place-items: center; }
-.brand-mark img { width: 34px; height: 34px; display: block; border-radius: 10px; box-shadow: 0 7px 24px rgba(95,49,140,.26); }
+/* The mark carries its own glow and has no plate, so it needs no rounding or
+   drop shadow of its own. */
+.brand-mark img { width: 34px; height: 34px; display: block; }
 .activity-primary { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 100%; padding-top: 8px; }
 .activity-primary button, .activity-bottom button {
   position: relative; width: 46px; height: 45px; display: grid; place-items: center; color: #85818e; border-radius: 8px;
@@ -137,7 +141,7 @@ button { border: 0; background: none; cursor: pointer; }
   content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 2px; border-radius: 4px; background: var(--purple);
 }
 .activity-primary svg, .activity-bottom svg { width: 21px; height: 21px; stroke-width: 1.55; }
-.forge-rail-icon { width: 24px; height: 24px; display: block; border-radius: 7px; }
+.forge-rail-icon { width: 24px; height: 24px; display: block; }
 .activity-primary button i {
   position: absolute; right: 5px; bottom: 6px; min-width: 14px; height: 14px; padding: 0 3px; display: grid; place-items: center; border-radius: 8px; background: #655c6c; color: white; font-size: 8px; font-style: normal;
 }
@@ -175,7 +179,41 @@ button { border: 0; background: none; cursor: pointer; }
 .explorer-footer div { height: 27px; display: flex; align-items: center; gap: 5px; padding: 0 10px; color: #9b97a2; font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; }
 .explorer-footer svg { width: 12px; }
 
-.editor-pane { flex: 1 1 auto; min-width: 300px; display: grid; grid-template-rows: 43px 34px minmax(0, 1fr); background: #121116; }
+.editor-pane { flex: 1 1 auto; min-width: 320px; display: grid; grid-template-rows: 43px 34px minmax(0, 1fr); background: #121116; }
+
+/* Column dividers. The hit area is wider than the visible line so the handle is
+   comfortable to grab; the line itself only appears on hover, drag, or focus. */
+.panel-resizer {
+  flex: 0 0 6px;
+  width: 6px;
+  position: relative;
+  z-index: 3;
+  margin: 0 -3px;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+}
+.panel-resizer-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background .12s ease;
+}
+.panel-resizer:hover .panel-resizer-grip,
+.panel-resizer:focus-visible .panel-resizer-grip,
+body.is-resizing-columns .panel-resizer:active .panel-resizer-grip {
+  background: var(--purple);
+}
+.panel-resizer:focus-visible { outline: none; }
+.panel-resizer:focus-visible .panel-resizer-grip { box-shadow: 0 0 0 1px rgba(167,139,250,.45); }
+
+/* Keep the pointer consistent and stop the drag selecting editor text. */
+body.is-resizing-columns { cursor: col-resize; user-select: none; }
+body.is-resizing-columns * { cursor: col-resize !important; }
 .editor-tabs { min-width: 0; display: flex; background: #17161b; border-bottom: 1px solid #24222a; overflow: hidden; }
 .editor-tab { position: relative; min-width: 126px; max-width: 190px; height: 43px; padding: 0 10px; display: flex; align-items: center; gap: 7px; color: #8f8b97; border-right: 1px solid #25232b; white-space: nowrap; }
 .editor-tab::before { content: ""; position: absolute; left: 0; top: 0; right: 0; height: 1px; background: transparent; }
@@ -253,6 +291,8 @@ button { border: 0; background: none; cursor: pointer; }
 .event-title { color: #d5d0da; font-size: 11.5px; font-weight: 560; }
 .event-time { color: #5f5b65; font-size: 8.5px; }
 .event-message { grid-column: 1 / 3; color: #88838f; font-size: 10.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.event-message p { margin: 0; }
+.event-message p + p { margin-top: 0.5em; }
 .event-summary > svg { grid-column: 3; grid-row: 1 / 3; align-self: center; width: 12px; color: #5f5a66; transition: transform .16s; }
 .event-summary > svg.expanded { transform: rotate(180deg); }
 .event-data { max-height: 190px; overflow: auto; margin: 8px 0 0; padding: 9px; border: 1px solid #2f2c35; border-radius: 7px; background: #121116; color: #9b95a2; font: 9px/1.5 "Cascadia Code", monospace; white-space: pre-wrap; }
@@ -415,6 +455,17 @@ button { border: 0; background: none; cursor: pointer; }
 .chat-timeline { display: grid; gap: 9px; }
 .chat-message { border: 1px solid #302d36; border-radius: 9px; background: #1c1a20; }
 .chat-message.user { padding: 9px 10px; border-color: #42324f; background: #251d2c; }
+.objective-card { margin-bottom: 14px; }
+.objective-summary { display: block; width: 100%; padding: 0; text-align: left; }
+.objective-summary.expandable { cursor: pointer; }
+.objective-card header svg { width: 12px; margin-left: auto; color: #66606c; transition: transform .15s; }
+.objective-card header svg.expanded { transform: rotate(180deg); }
+/* A multiline request collapses to one row so it reads like the rest of the
+   timeline's summary rows; the chevron expands it back to full text.
+   Specificity has to beat .chat-message.user p (0,2,1) — matched here by
+   also keying off .chat-message — or the later, equally-specific rule wins
+   on source order and silently keeps the pre-wrap. */
+.chat-message.objective-card p.collapsed { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .chat-message header, .chat-message summary { display: flex; align-items: center; gap: 7px; color: #cfc8d4; font-size: 9.5px; }
 .chat-message header time, .chat-message summary time { margin-left: auto; color: #625d68; font-size: 7.5px; }
 .chat-message.user p { margin: 6px 0 0; color: #aea7b4; font-size: 10.5px; line-height: 1.55; white-space: pre-wrap; }
@@ -468,6 +519,18 @@ button { border: 0; background: none; cursor: pointer; }
 .command-results button kbd { color: #6f6874; font-size: 8px; }
 .command-empty { padding: 12px; color: #716b77; font-size: 9px; text-align: center; }
 
+/* Terminal Styles */
+.terminal-container {
+  background: var(--surface);
+  border-radius: 4px;
+}
+.terminal-container .xterm-viewport {
+  background-color: var(--surface) !important;
+}
+.terminal-container .xterm-screen {
+  padding: 4px;
+}
+
 @media (max-width: 1180px) {
   .explorer-panel { width: 190px; flex-basis: 190px; }
   .workbench-panel { width: 210px; flex-basis: 210px; }
@@ -480,5 +543,8 @@ button { border: 0; background: none; cursor: pointer; }
   .ide-window { border-radius: 0; border: 0; }
   .explorer-panel { display: none; }
   .workbench-panel { display: none; }
-  .agent-panel { width: 330px; flex-basis: 330px; }
+  /* The side columns are fixed at this width, so their dividers would resize
+     something the user cannot see. */
+  .panel-resizer { display: none; }
+  .agent-panel { width: 330px !important; flex: 0 0 330px !important; }
 }

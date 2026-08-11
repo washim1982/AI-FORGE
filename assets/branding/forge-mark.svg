@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Forge application mark: a molten, faceted gem. Master source for every
+       generated raster icon; regenerate with `npm run icons` after editing.
+
+       Filled facets rather than hollow strokes, so the mark stays legible on
+       both dark and light backgrounds and at every size from 16px up — a
+       hairline neon-outline version tried earlier washed out on light
+       surfaces and blurred into an indistinct dot below 24px. Transparent
+       background; the mark sits directly on the taskbar or title bar. -->
+  <defs>
+    <!-- Facet fills, anchored to the app's own accent (--purple #b978ff /
+         --purple-soft #8e55d7): lightest facing the viewer, darkest in
+         shadow, the way a cut stone reflects light differently per face. -->
+    <linearGradient id="fCenter" x1="20%" y1="0%" x2="80%" y2="100%">
+      <stop offset="0%" stop-color="#fdf8ff"/>
+      <stop offset="100%" stop-color="#e6cdff"/>
+    </linearGradient>
+    <linearGradient id="fLeftCrown" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e2c3ff"/>
+      <stop offset="100%" stop-color="#c495ff"/>
+    </linearGradient>
+    <linearGradient id="fRightCrown" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#caa0ff"/>
+      <stop offset="100%" stop-color="#b978ff"/>
+    </linearGradient>
+    <linearGradient id="fLeftPavilion" x1="0%" y1="0%" x2="60%" y2="100%">
+      <stop offset="0%" stop-color="#a973f2"/>
+      <stop offset="100%" stop-color="#8e55d7"/>
+    </linearGradient>
+    <linearGradient id="fRightPavilion" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8e55d7"/>
+      <stop offset="100%" stop-color="#5b2ea6"/>
+    </linearGradient>
+
+    <filter id="ambient" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="16" result="wide"/>
+      <feGaussianBlur stdDeviation="5" result="tight"/>
+      <feMerge>
+        <feMergeNode in="wide"/>
+        <feMergeNode in="tight"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- One gem silhouette assembled from five flat facets:
+       table (190,100)-(322,100), shoulders (140,176)/(372,176), tip (256,412),
+       split by a girdle line and one centerline into crown/pavilion facets. -->
+  <g filter="url(#ambient)">
+    <polygon points="190,100 322,100 256,176" fill="url(#fCenter)"/>
+    <polygon points="190,100 140,176 256,176" fill="url(#fLeftCrown)"/>
+    <polygon points="322,100 372,176 256,176" fill="url(#fRightCrown)"/>
+    <polygon points="140,176 256,412 256,176" fill="url(#fLeftPavilion)"/>
+    <polygon points="372,176 256,412 256,176" fill="url(#fRightPavilion)"/>
+  </g>
+
+  <!-- Facet edges: thin light strokes read as cut lines under the glow, the
+       way a jeweler's facet edges catch light. -->
+  <g fill="none" stroke="#fdf8ff" stroke-width="2.5" stroke-linejoin="round" opacity=".55">
+    <polygon points="190,100 322,100 372,176 256,412 140,176"/>
+    <line x1="190" y1="100" x2="256" y2="176"/>
+    <line x1="322" y1="100" x2="256" y2="176"/>
+    <line x1="140" y1="176" x2="372" y2="176"/>
+    <line x1="256" y1="176" x2="256" y2="412"/>
+  </g>
+
+  <!-- Glint: a soft highlight streak on the brightest facet. -->
+  <path d="M204,118 L222,118 L214,150 L200,150 Z" fill="#ffffff" opacity=".5"/>
+</svg>

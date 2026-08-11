@@ -18,6 +18,7 @@ import { chatWithLocalModel, discoverLocalRuntimes, listLocalModels } from "./pr
 import { listRunManifests, readRunManifest, recoverInterruptedRuns } from "./run-store.js";
 import { readProjectScripts, readWorkspaceStatus, runProjectCheck, searchWorkspace } from "./workbench.js";
 import { buildWorkspaceTree, createSnapshot, readWorkspaceFile, repositoryMap, retrieveEvidence, saveWorkspaceFile, workspaceRoot } from "./workspace.js";
+import { createTerminal, getTerminal, resizeTerminal, destroyTerminal } from "./terminal.js";
 
 function isProviderConfig(value: unknown): value is ProviderConfig {
   if (!value || typeof value !== "object") return false;
@@ -145,6 +146,68 @@ export async function createApiApp(): Promise<Express> {
       finished = true;
       if (!response.writableEnded) response.status(400).json({ error: errorMessage(error) });
     }
+  });
+
+  app.post("/api/terminal/spawn", (request, response) => {
+    try {
+      const { cols = 80, rows = 24 } = request.body || {};
+      const { id } = createTerminal(cols, rows);
+      response.json({ id });
+    } catch (error) {
+      response.status(500).json({ error: errorMessage(error) });
+    }
+  });
+
+  app.get("/api/terminal/:id/stream", (request, response) => {
+    const { id } = request.params;
+    const pty = getTerminal(id);
+    if (!pty) {
+      response.status(404).json({ error: "Terminal not found." });
+      return;
+    }
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive"
+    });
+    
+    const onData = (data: string) => {
+      response.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+    
+    const disposable = pty.onData(onData);
+    
+    request.on("close", () => {
+      disposable.dispose();
+    });
+  });
+
+  app.post("/api/terminal/:id/input", (request, response) => {
+    const { id } = request.params;
+    const { data } = request.body || {};
+    const pty = getTerminal(id);
+    if (!pty) {
+      response.status(404).json({ error: "Terminal not found." });
+      return;
+    }
+    if (typeof data === "string") {
+      pty.write(data);
+    }
+    response.json({ success: true });
+  });
+
+  app.post("/api/terminal/:id/resize", (request, response) => {
+    const { id } = request.params;
+    const { cols, rows } = request.body || {};
+    const pty = getTerminal(id);
+    if (!pty) {
+      response.status(404).json({ error: "Terminal not found." });
+      return;
+    }
+    if (typeof cols === "number" && typeof rows === "number") {
+      resizeTerminal(id, cols, rows);
+    }
+    response.json({ success: true });
   });
 
   app.get("/api/context", async (_request, response) => {

@@ -45,6 +45,8 @@ markdown.renderer.rules.link_open = (tokens, index, options, environment, self) 
 
 interface AgentPanelProps {
   events: AgentEvent[];
+  /** The prompt that started the current Agent v2 run, shown above its timeline. */
+  objective: string;
   messages: ForgeChatMessage[];
   mode: "chat" | "agent";
   running: boolean;
@@ -62,11 +64,19 @@ interface AgentPanelProps {
   onRefreshModels: () => void;
   onNewSession: () => void;
   onDecision: (decision: "approve" | "retry" | "discard") => void;
+  /** Column width chosen by the user; omitted falls back to the CSS default. */
+  width?: number;
 }
 
-function phaseIcon(event: AgentEvent) {
+// `active` is true only for the single event actually in flight right now.
+// Every event keeps whatever status it was emitted with — that's an
+// immutable log, not something to rewrite — but a "running" row that has
+// since been superseded, or that the stream ended without resolving, should
+// not keep spinning: it reads as the whole panel being stuck even after the
+// run finished.
+function phaseIcon(event: AgentEvent, active: boolean) {
   if (event.status === "error") return <XCircle />;
-  if (event.status === "running") return <LoaderCircle className="spinning" />;
+  if (event.status === "running") return <LoaderCircle className={active ? "spinning" : ""} />;
   if (event.kind === "snapshot.created") return <GitCompareArrows />;
   if (event.phase === "plan") return <ListTree />;
   if (event.phase === "human") return <Clock3 />;
@@ -77,25 +87,41 @@ function phaseIcon(event: AgentEvent) {
   return <Check />;
 }
 
-function TimelineEvent({ event, last }: { event: AgentEvent; last: boolean }) {
+function TimelineEvent({ event, last, active }: { event: AgentEvent; last: boolean; active: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const hasData = Boolean(event.data && Object.keys(event.data).length);
   return (
     <div className={`timeline-event ${event.status}`}>
       <div className="timeline-rail">
-        <span className="timeline-icon">{phaseIcon(event)}</span>
+        <span className="timeline-icon">{phaseIcon(event, active)}</span>
         {!last && <span className="timeline-line" />}
       </div>
       <div className="event-body">
         <button className="event-summary" onClick={() => hasData && setExpanded((value) => !value)}>
           <span className="event-title">{event.title}</span>
           <span className="event-time">{new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-          <span className="event-message">{event.message}</span>
+          <div className="event-message" dangerouslySetInnerHTML={{ __html: markdown.render(event.message) }} />
           {hasData && <ChevronDown className={expanded ? "expanded" : ""} />}
         </button>
         {expanded && <pre className="event-data">{JSON.stringify(event.data, null, 2)}</pre>}
       </div>
     </div>
+  );
+}
+
+function ObjectiveCard({ objective }: { objective: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const multiline = objective.includes("\n");
+  return (
+    <article className="chat-message user objective-card">
+      <button className={`objective-summary${multiline ? " expandable" : ""}`} onClick={() => multiline && setExpanded((value) => !value)}>
+        <header>
+          <strong>You</strong>
+          {multiline && <ChevronDown className={expanded ? "expanded" : ""} />}
+        </header>
+        <p className={multiline && !expanded ? "collapsed" : undefined}>{objective}</p>
+      </button>
+    </article>
   );
 }
 
@@ -136,6 +162,7 @@ function ChatResponse({ message, expanded }: { message: ForgeChatMessage; expand
 
 export function AgentPanel({
   events,
+  objective,
   messages,
   mode,
   running,
@@ -153,6 +180,7 @@ export function AgentPanel({
   onRefreshModels,
   onNewSession,
   onDecision,
+  width,
 }: AgentPanelProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [runHistory, setRunHistory] = useState<ForgeRunManifest[]>([]);
@@ -183,7 +211,7 @@ export function AgentPanel({
   };
 
   return (
-    <aside className="agent-panel">
+    <aside className="agent-panel" style={width ? { width, flex: `0 0 ${width}px` } : undefined}>
       <header className="agent-header">
         <div className="session-tab"><CircleDot /><span>Agent</span><X /></div>
         <div className="agent-actions">
@@ -203,9 +231,12 @@ export function AgentPanel({
           {historyError && <div className="inline-error"><XCircle />{historyError}</div>}
           {!historyError && !runHistory.length && <div className="panel-empty">No persisted agent runs yet.</div>}
           {runHistory.map((run) => <article key={run.runId}><div><strong>{run.objective}</strong><span className={`run-status ${run.status}`}>{run.status}</span></div><small>{run.tasks.filter((task) => task.status === "completed").length}/{run.tasks.length} tasks · {new Date(run.updatedAt).toLocaleString()}</small></article>)}
-        </div> : mode === "chat" ? (messages.length ? <ChatTimeline messages={messages} /> : <EmptySession mode={mode} />) : events.length === 0 ? <EmptySession mode={mode} /> : events.map((item) => (
-          <TimelineEvent key={item.id} event={item} last={item.id === lastEventId} />
-        ))}
+        </div> : mode === "chat" ? (messages.length ? <ChatTimeline messages={messages} /> : <EmptySession mode={mode} />) : events.length === 0 ? <EmptySession mode={mode} /> : <>
+          {objective && <ObjectiveCard objective={objective} />}
+          {events.map((item) => (
+            <TimelineEvent key={item.id} event={item} last={item.id === lastEventId} active={running && item.id === lastEventId} />
+          ))}
+        </>}
         {error && <div className="inline-error"><XCircle />{error}</div>}
       </div>
       {running && (

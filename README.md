@@ -226,6 +226,31 @@ $env:WORKSPACE_ROOT = "C:\path\to\project"
 npm run dev
 ```
 
+## Layout
+
+Explorer, editor, and agent panel are all resizable. Drag the divider between
+any two columns, or focus it and use the arrow keys (hold Shift for finer
+steps); double-click a divider to restore its default width. Each width is
+remembered per browser profile.
+
+The editor keeps a 320px floor, so widening a side panel can never squeeze it
+out. Narrowing the window compresses the panels temporarily without discarding
+the widths you chose — they come back when the window grows again.
+
+## Branding
+
+`assets/branding/forge-mark.svg` is the master application mark and
+`assets/branding/forge-mark-line.svg` is the single-colour activity-bar mark.
+Every raster icon — the Windows `.ico`, the Code-OSS tiles, the extension icon,
+and the in-app rail icon — is generated from those two files:
+
+```bash
+npm run icons
+```
+
+The activity-bar icon stays vector and uses `currentColor`, because the
+workbench tints it: dim when the view is closed, bright when it is open.
+
 ## Verification
 
 ```bash

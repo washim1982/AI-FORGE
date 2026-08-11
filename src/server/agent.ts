@@ -652,7 +652,7 @@ async function gatherBrief(
     focusPaths,
   });
   const listing = pathListing(snapshot, request.prompt, run.budget.contextTokens <= 8192 ? 60 : 200);
-  const planRaw = await chatWithLocalModel(
+  let planRaw = await chatWithLocalModel(
     request.provider,
     [
       { role: "system", content: GATHER_SYSTEM },
@@ -667,7 +667,31 @@ async function gatherBrief(
     ],
     signal,
   );
-  const plan = validateRetrievalPlan(parseModelJson(planRaw), snapshot, request.prompt);
+  
+  let plan: RetrievalPlan;
+  try {
+    plan = validateRetrievalPlan(parseModelJson(planRaw), snapshot, request.prompt);
+  } catch (firstError) {
+    const diagnostics = firstError instanceof Error ? firstError.message : "Invalid retrieval plan";
+    planRaw = await chatWithLocalModel(
+      request.provider,
+      [
+        { role: "system", content: GATHER_SYSTEM },
+        {
+          role: "user",
+          content: truncateForBudget(
+            `Create a retrieval plan for this task. Return JSON with keys queries (1-6 strings), file_hints (exact paths from the candidates), and reasoning_summary.\n\nTASK\n${request.prompt}\n\nSNAPSHOT\n${snapshot.id}\n\n${pack ? `WORKSPACE CONTEXT (.ai-forge)\n${pack}\n\n` : ""}CANDIDATE PATHS\n${listing}`,
+            run.budget.retrievalPrompt,
+            "retrieval prompt",
+          ),
+        },
+        { role: "assistant", content: planRaw },
+        { role: "user", content: `Your plan was rejected. Correct it once and return only the complete JSON object.\n\nVALIDATION ERRORS\n${diagnostics}` },
+      ],
+      signal,
+    );
+    plan = validateRetrievalPlan(parseModelJson(planRaw), snapshot, request.prompt);
+  }
   const evidence = await retrieveEvidence([...plan.queries, request.prompt], plan.file_hints, run.budget.evidenceRegions, snapshot);
   emit(event(
     runId,
@@ -699,8 +723,9 @@ async function gatherBrief(
     [{ role: "system", content: GATHER_SYSTEM }, { role: "user", content: gatherUserPrompt }],
     signal,
   );
-  let parsed = parseModelJson(briefRaw);
+  let parsed: unknown;
   try {
+    parsed = parseModelJson(briefRaw);
     const brief = validateBrief(parsed, snapshot, request.prompt, evidence);
     return { brief, evidence };
   } catch (firstError) {
@@ -821,9 +846,7 @@ async function applyChange(
 ): Promise<{ outcome: ChangeOutcome; mode: "content" | "edits" }> {
   const { request, brief, run, snapshot, supplementalEvidence, repairDiagnostics } = context;
   const current = target.content ?? "";
-  const mode: "content" | "edits" = run.config.editBlocks
-    && change.operation === "modify"
-    && current.length > run.budget.wholeFileRewriteLimit
+  const mode: "content" | "edits" = change.operation === "modify"
     ? "edits"
     : "content";
 
@@ -833,7 +856,7 @@ async function applyChange(
     : targetView(current, run.budget.applyTarget, focus, { numbered: mode === "edits" });
 
   const contract = mode === "edits"
-    ? `{"status":"edits","edits":[{"start_line":12,"find":"exact text copied from the file","replace":"replacement text"}]}\nThe file is shown as \`<line number>${LINE_NUMBER_MARKER}<text>\`. Do not put the number or the arrow inside find or replace. Set start_line to the number of the first line of the find block. Never edit a line from an omitted region.`
+    ? `{"status":"edits","edits":[{"start_line":12,"find":"exact text copied from the file","replace":"replacement text"}]}\nThe file is shown as \`<line number>${LINE_NUMBER_MARKER}<text>\`. Do not put the number or the arrow inside find or replace. Set start_line to the number of the first line of the find block. The replacement text MUST be different from the find text. Never edit a line from an omitted region.`
     : `{"status":"content","content":"the complete new contents of this one file"}`;
 
   const prompt = truncateForBudget(
@@ -903,7 +926,7 @@ async function applyChange(
       [
         ...messages,
         { role: "assistant", content: raw.slice(0, 4000) },
-        { role: "user", content: `That response was rejected. Correct it once and return only the complete JSON object.\n\nERROR\n${diagnostics}` },
+        { role: "user", content: `That response was rejected. Correct it once and return only the complete JSON object.\n\nERROR\n${diagnostics}${diagnostics.includes("no change") ? "\nYour replacement text MUST be different from the original text you found." : ""}` },
       ],
       signal,
     );
@@ -929,7 +952,7 @@ async function applyBriefCombined(
   const targets = hydrated
     .map((target) => `--- ${target.path} | sha:${target.sha || "new-file"}\n${target.content ?? "[NEW FILE — NO CURRENT CONTENT]"}`)
     .join("\n\n");
-  const raw = await chatWithLocalModel(
+  let raw = await chatWithLocalModel(
     request.provider,
     [
       { role: "system", content: APPLY_SYSTEM },
@@ -944,7 +967,30 @@ async function applyBriefCombined(
     ],
     signal,
   );
-  return validateApplyOutcome(parseModelJson(raw), brief, snapshot);
+  
+  try {
+    return validateApplyOutcome(parseModelJson(raw), brief, snapshot);
+  } catch (firstError) {
+    const diagnostics = firstError instanceof Error ? firstError.message : "Invalid apply outcome";
+    raw = await chatWithLocalModel(
+      request.provider,
+      [
+        { role: "system", content: APPLY_SYSTEM },
+        {
+          role: "user",
+          content: truncateForBudget(
+            `Implement this validated ExecutionBrief. Return exactly one of these JSON objects:\n1. {"status":"mutations","mutations":[{"change_id":"...","path":"...","operation":"create|modify|delete","content":"complete content except for delete"}]}\n2. {"status":"context_request","queries":["..."],"file_hints":["safe/existing/path"],"reason":"..."}\n3. {"status":"scope_amendment","paths":["safe/path"],"reason":"..."}\n\nUse context_request only for missing read-only signatures, definitions, or imports. Use scope_amendment instead of writing an undeclared file. Never return partial mutations.\n\nTASK\n${request.prompt}\n\nEXECUTION BRIEF\n${JSON.stringify(brief, null, 2)}\n\n${repairDiagnostics ? `REPAIR DIAGNOSTICS\n${truncateForBudget(repairDiagnostics, run.budget.diagnostics, "diagnostics")}\n\n` : ""}${supplementalEvidence ? `APPROVED READ-ONLY CONTEXT\n${truncateForBudget(supplementalEvidence, run.budget.supplementalEvidence, "context")}\n\n` : ""}CURRENT DECLARED TARGETS\n${targets}`,
+            run.budget.plannerPrompt + run.budget.applyTarget,
+            "apply prompt",
+          ),
+        },
+        { role: "assistant", content: raw },
+        { role: "user", content: `Your response was rejected. Correct it once and return only the complete JSON object.\n\nVALIDATION ERRORS\n${diagnostics}` },
+      ],
+      signal,
+    );
+    return validateApplyOutcome(parseModelJson(raw), brief, snapshot);
+  }
 }
 
 /**
@@ -1054,7 +1100,7 @@ function runCommand(
   timeoutMs = 120_000,
 ): Promise<{ passed: boolean; output: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, env: process.env, windowsHide: true });
+    const child = spawn(command, args, { cwd, env: { ...process.env, CI: "true" }, windowsHide: true });
     let output = "";
     let settled = false;
     const append = (chunk: Buffer) => {
@@ -1128,6 +1174,20 @@ async function verifyStage(
     const packageJson = JSON.parse(await fs.readFile(packagePath, "utf8")) as { scripts?: Record<string, string> };
     const scripts = packageJson.scripts || {};
     const checks = ["typecheck", "lint", "test", "build"].filter((name) => Boolean(scripts[name]));
+    
+    if (checks.length > 0) {
+      const installLabel = "npm install";
+      emit(event(runId, "verification.command", "verify", "Installing dependencies", installLabel, "running", { command: installLabel }));
+      const windows = os.platform() === "win32";
+      const executable = windows ? process.env.ComSpec || "cmd.exe" : "npm";
+      const args = windows ? ["/d", "/s", "/c", "npm.cmd", "install", "--no-audit", "--no-fund"] : ["install", "--no-audit", "--no-fund"];
+      const installResult = await runCommand(executable, args, stageRoot, signal);
+      if (!installResult.passed) {
+        diagnostics.push(`${installLabel} failed:\n${installResult.output}`);
+        return { passed: false, diagnostics: diagnostics.join("\n"), commands: commandResults, available };
+      }
+    }
+
     available.push(...checks.map((name) => `npm run ${name}`));
     for (const check of checks) {
       const commandLabel = `npm run ${check}`;
@@ -1688,9 +1748,32 @@ async function executeManifest(manifest: ForgeRunManifest, emit: EventSink, sign
   manifest.suspension = undefined;
   manifest = await saveRunManifest(manifest);
   const changedPaths = [...new Set(manifest.tasks.flatMap((task) => task.changed_paths || []))];
-  await appendTaskJournal(manifest.runId, "Run completed", `${manifest.tasks.length} tasks; changed ${changedPaths.join(", ") || "nothing"}.`).catch(() => undefined);
+  const completedTasks = manifest.tasks.filter(t => t.status === "completed");
+  
+  let runSummary = `${completedTasks.length} task${completedTasks.length === 1 ? "" : "s"} completed; ${changedPaths.length} workspace path${changedPaths.length === 1 ? "" : "s"} changed.`;
+  if (completedTasks.length > 0) {
+    try {
+      const summaryPrompt = `Summarize the work completed in this autonomous agent run. Describe the issue it fixed, the problem it solved, or provide a concise summary of the changes made.\nFormat the response as clean Markdown. Keep it brief and focused on the outcome.\n\nORIGINAL GOAL\n${manifest.objective}\n\nTASKS COMPLETED\n${completedTasks.map((t, idx) => `${idx + 1}. ${t.title}: ${t.objective}`).join("\n\n")}`;
+      const summaryRaw = await chatWithLocalModel(
+        manifest.provider,
+        [
+          { role: "system", content: "You are an expert software engineer providing a final summary of an autonomous coding task." },
+          { role: "user", content: summaryPrompt }
+        ],
+        signal
+      );
+      if (summaryRaw.trim()) {
+        runSummary = summaryRaw.trim();
+      }
+    } catch (e) {
+      // Fallback to default message on LLM failure
+      console.warn("Could not generate run summary", e);
+    }
+  }
+
+  await appendTaskJournal(manifest.runId, "Run completed", runSummary).catch(() => undefined);
   await pruneStore().catch(() => undefined);
-  emit(event(manifest.runId, "run.completed", "system", "Forge v2 run completed", `${manifest.tasks.length} task${manifest.tasks.length === 1 ? "" : "s"} completed; ${changedPaths.length} workspace path${changedPaths.length === 1 ? "" : "s"} changed.`, "success", { runId: manifest.runId, changedPaths }));
+  emit(event(manifest.runId, "run.completed", "system", "Forge v2 run completed", runSummary, "success", { runId: manifest.runId, changedPaths }));
   return manifest;
 }
 

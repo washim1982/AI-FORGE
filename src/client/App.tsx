@@ -24,6 +24,7 @@ import {
   ShieldCheck,
   Square,
   Terminal,
+  TerminalSquare,
   WandSparkles,
   X,
   Zap,
@@ -31,6 +32,8 @@ import {
 import type { editor } from "monaco-editor";
 import { AgentPanel, type ForgeChatMessage } from "./AgentPanel";
 import { fetchFile, fetchModels, fetchRuntimes, fetchTree, fetchWorkspaceStatus, saveFile, sendChat, streamAgentDecision, streamAgentRun } from "./api";
+import { PanelResizer } from "./PanelResizer";
+import { TerminalView } from "./TerminalView";
 import { WorkbenchPanel, type WorkbenchView } from "./WorkbenchPanel";
 import type {
   AgentEvent,
@@ -42,7 +45,7 @@ import type {
   WorkspaceFile,
 } from "../shared/types";
 
-const forgeIconUrl = new URL("./assets/forge-code-flame.png", import.meta.url).href;
+const forgeIconUrl = new URL("./assets/forge-mark.png", import.meta.url).href;
 
 const DEFAULTS: Record<ProviderKind, ProviderConfig> = {
   ollama: {
@@ -64,6 +67,25 @@ const DEFAULTS: Record<ProviderKind, ProviderConfig> = {
     temperature: 0.1,
   },
 };
+
+// Column limits. The editor keeps EDITOR_MIN so a wide side panel can never
+// squeeze it out; the caps stop a panel eating the window on a large display.
+const RAIL_WIDTH = 54;
+const EDITOR_MIN = 320;
+const EXPLORER = { min: 170, cap: 560, preset: 250 };
+// The floor matches .agent-panel's CSS min-width; a smaller inline width would
+// simply be ignored and the handle would appear stuck.
+const AGENT = { min: 320, cap: 760, preset: 390 };
+
+function loadStoredWidth(key: string, fallback: number, min: number, cap: number): number {
+  try {
+    const stored = Number(localStorage.getItem(key));
+    if (!Number.isFinite(stored) || stored <= 0) return fallback;
+    return Math.round(Math.min(cap, Math.max(min, stored)));
+  } catch {
+    return fallback;
+  }
+}
 
 function loadStoredConfig(): ProviderConfig {
   try {
@@ -251,14 +273,23 @@ export default function App() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [explorerOpen, setExplorerOpen] = useState(true);
   const [workbenchView, setWorkbenchView] = useState<WorkbenchView>("explorer");
-  const [agentOpen, setAgentOpen] = useState(true);
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [explorerWidth, setExplorerWidth] = useState(() => loadStoredWidth("forge.layout.explorer", EXPLORER.preset, EXPLORER.min, EXPLORER.cap));
+  const [agentWidth, setAgentWidth] = useState(() => loadStoredWidth("forge.layout.agent", AGENT.preset, AGENT.min, AGENT.cap));
+  const [viewportWidth, setViewportWidth] = useState(() => (typeof window === "undefined" ? 1600 : window.innerWidth));
   const [editorMaximized, setEditorMaximized] = useState(false);
   const [splitEditor, setSplitEditor] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(false);
   const [loadingFile, setLoadingFile] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [config, setConfig] = useState<ProviderConfig>(loadStoredConfig);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [task, setTask] = useState("");
+  // The event timeline is a system log, not a chat transcript — it never
+  // echoes the request that produced it. This holds the submitted objective
+  // so an Agent v2 run can show what was actually asked, the way chat mode
+  // shows the user's message bubble.
+  const [runObjective, setRunObjective] = useState("");
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [chatMessages, setChatMessages] = useState<ForgeChatMessage[]>([]);
   const [agentMode, setAgentMode] = useState<"chat" | "agent">("chat");
@@ -280,6 +311,38 @@ export default function App() {
   const dirty = Boolean(activeFile && activeDraft !== activeFile.content);
   const rootName = workspacePath.split(/[\\/]/).filter(Boolean).at(-1)?.toUpperCase() || "WORKSPACE";
   const activeRuntime = runtimes.find((runtime) => runtime.kind === config.kind);
+
+  // A panel may only grow into space the other columns are not using, so the
+  // editor always keeps EDITOR_MIN no matter how narrow the window gets.
+  const explorerMax = Math.max(
+    EXPLORER.min,
+    Math.min(EXPLORER.cap, viewportWidth - RAIL_WIDTH - EDITOR_MIN - (agentOpen ? agentWidth : 0)),
+  );
+  const agentMax = Math.max(
+    AGENT.min,
+    Math.min(AGENT.cap, viewportWidth - RAIL_WIDTH - EDITOR_MIN - (explorerOpen ? explorerWidth : 0)),
+  );
+
+  // State holds the width the user asked for; the fit to the current window is
+  // applied only at render. Clamping the stored value instead would make a
+  // temporary narrow window permanently shrink the layout.
+  const appliedExplorerWidth = Math.min(explorerWidth, explorerMax);
+  const appliedAgentWidth = Math.min(agentWidth, agentMax);
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("forge.layout.explorer", String(explorerWidth));
+      localStorage.setItem("forge.layout.agent", String(agentWidth));
+    } catch {
+      // A locked-down storage policy only costs the remembered layout.
+    }
+  }, [explorerWidth, agentWidth]);
 
   const refreshRuntimes = useCallback(async () => {
     setDiscoveringRuntimes(true);
@@ -480,6 +543,8 @@ export default function App() {
       return;
     }
     setEvents([]);
+    setRunObjective(prompt);
+    setTask("");
     try {
       await streamAgentRun({ prompt, provider: config, maxRepairCycles: 1, maxReplans: 1, maxTasks: 6, architecture: "v2" }, (agentEvent) => {
         setEvents((current) => [...current, agentEvent]);
@@ -594,8 +659,8 @@ export default function App() {
     <main className={`page-shell ${desktop ? "desktop" : ""}`}>
       <section className={`ide-window ${editorMaximized ? "editor-maximized" : ""}`}>
         <header className="titlebar">
-          <div className="window-dots"><span /><span /><span /></div>
-          <div className="nav-controls"><button title="Back" onClick={() => navigateFileHistory(-1)}><ChevronLeft /></button><button title="Forward" onClick={() => navigateFileHistory(1)}><ChevronRight /></button></div>
+          <div className="titlebar-app-name" style={{ paddingLeft: "12px", fontWeight: 750, fontSize: "12px", letterSpacing: "1px", color: "#e3dfe8" }}>FORGE IDE</div>
+          <div className="nav-controls" />
           <button className="command-center" onClick={() => setCommandOpen(true)}><Search /><span>Search files, symbols, or commands</span><kbd>Ctrl K</kbd></button>
           <div className="titlebar-actions">
             <div className="layout-controls">
@@ -612,27 +677,44 @@ export default function App() {
         </header>
 
         <div className="workbench">
-          <nav className="activity-rail">
-            <button className="brand-mark" title="Forge agent" onClick={() => setAgentOpen(true)}><img src={forgeIconUrl} alt="" /></button>
-            <div className="activity-primary">
-              <button className={explorerOpen && workbenchView === "explorer" ? "active" : ""} title="Explorer" onClick={() => activateWorkbench("explorer")}><Files /></button>
-              <button className={explorerOpen && workbenchView === "search" ? "active" : ""} title="Search" onClick={() => activateWorkbench("search")}><Search /></button>
-              <button className={explorerOpen && workbenchView === "source" ? "active" : ""} title="Source control" onClick={() => activateWorkbench("source")}><GitBranch />{workspaceStatus.changes.length > 0 && <i>{workspaceStatus.changes.length}</i>}</button>
-              <button className={explorerOpen && workbenchView === "run" ? "active" : ""} title="Run and checks" onClick={() => activateWorkbench("run")}><Bug /></button>
-              <button className={explorerOpen && workbenchView === "extensions" ? "active" : ""} title="Extensions" onClick={() => activateWorkbench("extensions")}><Blocks /></button>
-              <button className={agentOpen ? "active" : ""} title="Local agent" onClick={() => setAgentOpen((value) => !value)}><img className="forge-rail-icon" src={forgeIconUrl} alt="" /></button>
+          <div className="sidebar-container" style={{ display: "flex", flexDirection: "column", height: "100%", background: "#17161b", borderRight: !explorerOpen ? "none" : "1px solid var(--border-soft)" }}>
+            <div className="sidebar-body" style={{ display: "flex", flex: 1, minHeight: 0 }}>
+              <nav className="activity-rail">
+                <button className="brand-mark" title="Forge agent" onClick={() => setAgentOpen(true)}><img src={forgeIconUrl} alt="" /></button>
+                <div className="activity-primary">
+                  <button className={explorerOpen && workbenchView === "explorer" ? "active" : ""} title="Explorer" onClick={() => activateWorkbench("explorer")}><Files /></button>
+                  <button className={explorerOpen && workbenchView === "search" ? "active" : ""} title="Search" onClick={() => activateWorkbench("search")}><Search /></button>
+                  <button className={explorerOpen && workbenchView === "source" ? "active" : ""} title="Source control" onClick={() => activateWorkbench("source")}><GitBranch />{workspaceStatus.changes.length > 0 && <i>{workspaceStatus.changes.length}</i>}</button>
+                  <button className={explorerOpen && workbenchView === "run" ? "active" : ""} title="Run and checks" onClick={() => activateWorkbench("run")}><Bug /></button>
+                  <button className={explorerOpen && workbenchView === "extensions" ? "active" : ""} title="Extensions" onClick={() => activateWorkbench("extensions")}><Blocks /></button>
+                  <button className={agentOpen ? "active" : ""} title="Local agent" onClick={() => setAgentOpen((value) => !value)}><img className="forge-rail-icon" src={forgeIconUrl} alt="" /></button>
+                </div>
+                <div className="activity-bottom">
+                  <button className={explorerOpen && workbenchView === "security" ? "active" : ""} title="Security policy" onClick={() => activateWorkbench("security")}><ShieldCheck /></button>
+                  <button title="Settings" onClick={() => { setSettingsOpen(true); void refreshRuntimes(); }}><Settings /></button>
+                </div>
+              </nav>
+
+              {explorerOpen && !editorMaximized && (
+                <WorkbenchPanel view={workbenchView} nodes={tree} activePath={activePath} rootName={rootName} width={appliedExplorerWidth} onOpen={(path) => void openFile(path)} onRefreshTree={() => void refreshTree()} onOpenWorkspace={desktop ? () => void openWorkspace() : undefined} onOpenSettings={() => { setSettingsOpen(true); void refreshRuntimes(); }} onStatus={setWorkspaceStatus} />
+              )}
             </div>
-            <div className="activity-bottom">
-              <button className={explorerOpen && workbenchView === "security" ? "active" : ""} title="Security policy" onClick={() => activateWorkbench("security")}><ShieldCheck /></button>
-              <button title="Settings" onClick={() => { setSettingsOpen(true); void refreshRuntimes(); }}><Settings /></button>
-            </div>
-          </nav>
+          </div>
 
           {explorerOpen && !editorMaximized && (
-            <WorkbenchPanel view={workbenchView} nodes={tree} activePath={activePath} rootName={rootName} onOpen={(path) => void openFile(path)} onRefreshTree={() => void refreshTree()} onOpenWorkspace={desktop ? () => void openWorkspace() : undefined} onOpenSettings={() => { setSettingsOpen(true); void refreshRuntimes(); }} onStatus={setWorkspaceStatus} />
+            <PanelResizer
+              className="explorer-resizer"
+              label="Resize explorer"
+              edge="leading"
+              width={appliedExplorerWidth}
+              min={EXPLORER.min}
+              max={explorerMax}
+              onResize={setExplorerWidth}
+              onReset={() => setExplorerWidth(EXPLORER.preset)}
+            />
           )}
 
-          <section className="editor-pane">
+          <section className="editor-pane" style={terminalOpen ? { gridTemplateRows: "43px 34px minmax(0, 1fr) 300px" } : {}}>
             <EditorTabs tabs={tabs} activePath={activePath} drafts={drafts} onActivate={(path) => void openFile(path)} onClose={closeTab} onSplit={() => setSplitEditor((value) => !value)} onActions={() => setCommandOpen(true)} />
             <div className="editor-breadcrumbs">
               {breadcrumb.map((part, index) => (
@@ -641,6 +723,7 @@ export default function App() {
               <div className="breadcrumb-actions">
                 <button className={dirty ? "save active" : "save"} onClick={() => void saveActive()} disabled={!dirty} title="Save file"><Save /></button>
                 <button title="Run checks" onClick={() => activateWorkbench("run")}><Play /></button>
+                <button className={terminalOpen ? "active" : ""} title="Toggle terminal" onClick={() => setTerminalOpen((value) => !value)}><TerminalSquare /></button>
                 <button className={editorMaximized ? "active" : ""} title={editorMaximized ? "Restore editor" : "Maximize editor"} onClick={() => setEditorMaximized((value) => !value)}><Maximize2 /></button>
               </div>
             </div>
@@ -699,11 +782,38 @@ export default function App() {
                 </div>
               )}
             </div>
+
+            {terminalOpen && (
+              <div className="bottom-panel" style={{ borderTop: "1px solid #24222a", display: "flex", flexDirection: "column", background: "#121116", minHeight: 0 }}>
+                <div style={{ height: "34px", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 12px", borderBottom: "1px solid #201e25" }}>
+                  <span style={{ fontSize: "11px", fontWeight: 650, color: "#888491", textTransform: "uppercase", letterSpacing: "1px" }}>Terminal</span>
+                  <button onClick={() => setTerminalOpen(false)} style={{ color: "#6f6b76", background: "none", border: "none", cursor: "pointer", display: "grid", placeItems: "center" }}><X size={14} /></button>
+                </div>
+                <div style={{ flex: 1, minHeight: 0 }}>
+                  <TerminalView />
+                </div>
+              </div>
+            )}
           </section>
 
           {agentOpen && !editorMaximized && (
+            <PanelResizer
+              className="agent-resizer"
+              label="Resize agent panel"
+              edge="trailing"
+              width={appliedAgentWidth}
+              min={AGENT.min}
+              max={agentMax}
+              onResize={setAgentWidth}
+              onReset={() => setAgentWidth(AGENT.preset)}
+            />
+          )}
+
+          {agentOpen && !editorMaximized && (
             <AgentPanel
+              width={appliedAgentWidth}
               events={events}
+              objective={runObjective}
               messages={chatMessages}
               mode={agentMode}
               running={running}
@@ -719,7 +829,7 @@ export default function App() {
               onModelChange={switchModel}
               onModeChange={setAgentMode}
               onRefreshModels={() => void refreshRuntimes()}
-              onNewSession={() => { if (!running) { setEvents([]); setChatMessages([]); setAgentError(undefined); setTask(""); } }}
+              onNewSession={() => { if (!running) { setEvents([]); setChatMessages([]); setAgentError(undefined); setTask(""); setRunObjective(""); } }}
               onDecision={(decision) => void decideSuspendedRun(decision)}
             />
           )}

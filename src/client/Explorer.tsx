@@ -20,6 +20,8 @@ interface ExplorerProps {
   onOpen: (path: string) => void;
   onRefresh: () => void;
   onOpenWorkspace?: () => void;
+  /** Column width chosen by the user; omitted falls back to the CSS default. */
+  width?: number;
 }
 
 function FileTypeIcon({ name }: { name: string }) {
@@ -72,9 +74,9 @@ function TreeItem({ node, depth, activePath, onOpen }: {
   );
 }
 
-export function Explorer({ nodes, activePath, rootName, onOpen, onRefresh, onOpenWorkspace }: ExplorerProps) {
+export function Explorer({ nodes, activePath, rootName, onOpen, onRefresh, onOpenWorkspace, width }: ExplorerProps) {
   return (
-    <aside className="explorer-panel">
+    <aside className="explorer-panel" style={width ? { width, flex: `0 0 ${width}px` } : undefined}>
       <div className="section-eyebrow">Explorer</div>
       <div className="explorer-heading">
         <span>{rootName || "WORKSPACE"}</span>
