@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { __testables } from "./agent.js";
-import { assertSafeRelativePath, createSnapshot, setWorkspaceRoot, workspaceRoot } from "./workspace.js";
+import { assertSafeRelativePath, createSnapshot, createWorkspaceEntry, deleteWorkspaceEntry, renameWorkspaceEntry, setWorkspaceRoot, workspaceRoot } from "./workspace.js";
 import type { ExecutionBrief } from "../shared/types.js";
 
 test("workspace paths reject traversal and discussion content", () => {
@@ -142,3 +142,158 @@ test("workspace snapshots exclude generated, vendored, and discussion trees", as
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   }
 });
+
+test("a brief may create a file in an empty workspace", () => {
+  // The reported failure: an empty folder, a request to create one file, and a
+  // model that named the verb its own way. Every field the orchestrator can
+  // derive must be derived rather than demanded back.
+  const snapshot = { id: "snap_empty", createdAt: new Date().toISOString(), files: [] };
+  const brief = __testables.validateBrief(
+    {
+      objective: "Create hello_world.py",
+      changes: [{ id: "c1", path: "hello_world.py", operation: "add", intent: "print Hello, World!" }],
+      risk: { level: "low", reasons: [] },
+    },
+    snapshot,
+    "Create hello_world.py",
+    [],
+  );
+  assert.equal(brief.changes.length, 1);
+  assert.equal(brief.changes[0].operation, "create");
+  assert.equal(brief.changes[0].path, "hello_world.py");
+  assert.equal(brief.changes[0].preimage_sha, undefined);
+});
+
+test("the change verb is derived from the snapshot, never trusted blindly", () => {
+  const snapshot = {
+    id: "snap_one",
+    createdAt: new Date().toISOString(),
+    files: [{ path: "src/app.ts", sha: "a".repeat(64), size: 12 }],
+  };
+  const resolve = (operation: unknown, targetPath: string) => __testables.validateBrief(
+    {
+      objective: "x",
+      changes: [{ id: "c1", path: targetPath, operation, intent: "i" }],
+      risk: { level: "low", reasons: [] },
+    },
+    snapshot,
+    "x",
+    [],
+  ).changes[0];
+
+  // Wording varies; ground truth decides create versus modify.
+  for (const verb of ["create", "Create", " NEW ", "add", "write", "modify", "update", "nonsense", undefined]) {
+    assert.equal(resolve(verb, "src/app.ts").operation, "modify", `existing path with verb ${String(verb)}`);
+    assert.equal(resolve(verb, "src/fresh.ts").operation, "create", `new path with verb ${String(verb)}`);
+  }
+
+  // A modify carries the snapshot's own hash, so the pre-Apply CAS has
+  // something real to compare the live file against.
+  assert.equal(resolve("modify", "src/app.ts").preimage_sha, "a".repeat(64));
+
+  // A delete only ever happens when the model explicitly asked for one, so a
+  // garbled verb can never escalate into removing a file.
+  assert.equal(resolve("delete", "src/app.ts").operation, "delete");
+  assert.equal(resolve("remove", "src/app.ts").operation, "delete");
+  assert.throws(
+    () => resolve("delete", "src/missing.ts"),
+    /cannot be deleted because it is not a path in the snapshot/i,
+  );
+});
+
+test("a stale preimage hash from the model does not fail the brief", () => {
+  // The value is replaced by the snapshot's, and hydrateTargets plus promote
+  // do the real compare-and-swap against the live file.
+  const snapshot = {
+    id: "snap_one",
+    createdAt: new Date().toISOString(),
+    files: [{ path: "src/app.ts", sha: "b".repeat(64), size: 12 }],
+  };
+  const brief = __testables.validateBrief(
+    {
+      objective: "x",
+      changes: [{ id: "c1", path: "src/app.ts", operation: "modify", intent: "i", preimage_sha: "totally-wrong" }],
+      risk: { level: "low", reasons: [] },
+    },
+    snapshot,
+    "x",
+    [],
+  );
+  assert.equal(brief.changes[0].preimage_sha, "b".repeat(64));
+});
+
+test("explorer creation refuses unsafe paths and never overwrites", async () => {
+  const originalRoot = workspaceRoot();
+  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-create-test-"));
+  try {
+    await setWorkspaceRoot(fixtureRoot);
+
+    assert.equal(await createWorkspaceEntry("notes.md", "file"), "notes.md");
+    assert.equal(await fs.readFile(path.join(fixtureRoot, "notes.md"), "utf8"), "");
+
+    // Nested paths create their parents, and a trailing slash is tolerated.
+    assert.equal(await createWorkspaceEntry("src/lib/util.ts", "file"), "src/lib/util.ts");
+    assert.equal(await createWorkspaceEntry("assets/icons/", "directory"), "assets/icons");
+    assert.ok((await fs.stat(path.join(fixtureRoot, "assets", "icons"))).isDirectory());
+
+    // An existing path is never blanked.
+    await fs.writeFile(path.join(fixtureRoot, "keep.txt"), "precious", "utf8");
+    await assert.rejects(() => createWorkspaceEntry("keep.txt", "file"), /already exists/i);
+    assert.equal(await fs.readFile(path.join(fixtureRoot, "keep.txt"), "utf8"), "precious");
+    await assert.rejects(() => createWorkspaceEntry("src/lib", "directory"), /already exists/i);
+
+    // Same path gate the agent writes through.
+    await assert.rejects(() => createWorkspaceEntry("../escape.txt", "file"), /outside|escapes/i);
+    await assert.rejects(() => createWorkspaceEntry("node_modules/pkg/index.js", "file"), /outside|scope/i);
+    await assert.rejects(() => createWorkspaceEntry("discussion/notes.md", "file"), /outside|scope/i);
+    await assert.rejects(() => createWorkspaceEntry("C:/Windows/evil.txt", "file"), /workspace-relative/i);
+  } finally {
+    await setWorkspaceRoot(originalRoot);
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("explorer rename and delete respect the workspace boundary", async () => {
+  const originalRoot = workspaceRoot();
+  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-mutate-test-"));
+  try {
+    await setWorkspaceRoot(fixtureRoot);
+    await createWorkspaceEntry("src/old.ts", "file");
+    await fs.writeFile(path.join(fixtureRoot, "src", "old.ts"), "export const keep = 1;", "utf8");
+
+    // Renaming preserves content and can move between folders.
+    assert.equal(await renameWorkspaceEntry("src/old.ts", "src/new.ts"), "src/new.ts");
+    assert.equal(await fs.readFile(path.join(fixtureRoot, "src", "new.ts"), "utf8"), "export const keep = 1;");
+    await createWorkspaceEntry("lib", "directory");
+    assert.equal(await renameWorkspaceEntry("src/new.ts", "lib/moved.ts"), "lib/moved.ts");
+
+    // Refusals: missing source, occupied destination, escaping the workspace.
+    await assert.rejects(() => renameWorkspaceEntry("src/new.ts", "src/other.ts"), /no longer exists/i);
+    await createWorkspaceEntry("taken.txt", "file");
+    await createWorkspaceEntry("also.txt", "file");
+    await assert.rejects(() => renameWorkspaceEntry("also.txt", "taken.txt"), /already exists/i);
+    await assert.rejects(() => renameWorkspaceEntry("also.txt", "../escaped.txt"), /outside|escapes/i);
+    await assert.rejects(() => renameWorkspaceEntry("also.txt", "node_modules/sneaky.txt"), /outside|scope/i);
+    await assert.rejects(() => renameWorkspaceEntry("lib", "lib/inner"), /inside itself/i);
+
+    // Deleting removes a whole subtree, and never the workspace root.
+    await createWorkspaceEntry("doomed/nested/deep.txt", "file");
+    assert.equal(await deleteWorkspaceEntry("doomed"), "doomed");
+    assert.equal(await pathIsPresent(path.join(fixtureRoot, "doomed")), false);
+    await assert.rejects(() => deleteWorkspaceEntry("doomed"), /no longer exists/i);
+    await assert.rejects(() => deleteWorkspaceEntry("../"), /workspace-relative|outside|escapes/i);
+    assert.ok(await pathIsPresent(path.join(fixtureRoot, "taken.txt")));
+  } finally {
+    await setWorkspaceRoot(originalRoot);
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+async function pathIsPresent(target: string): Promise<boolean> {
+  try {
+    await fs.access(target);
+    return true;
+  } catch {
+    return false;
+  }
+}

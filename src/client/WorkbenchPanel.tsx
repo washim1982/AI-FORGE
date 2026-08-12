@@ -26,6 +26,9 @@ interface WorkbenchPanelProps {
   onOpenWorkspace?: () => void;
   onOpenSettings: () => void;
   onStatus: (status: WorkspaceStatus) => void;
+  onCreateEntry?: (name: string, kind: "file" | "directory") => Promise<void>;
+  onRenameEntry?: (fromPath: string, toPath: string) => Promise<void>;
+  onDeleteEntry?: (path: string) => Promise<void>;
   /** Column width chosen by the user; omitted falls back to the CSS default. */
   width?: number;
 }
@@ -197,7 +200,7 @@ export function WorkbenchPanel(props: WorkbenchPanelProps) {
   return (
     <PanelWidthContext.Provider value={props.width}>
       {props.view === "explorer"
-        ? <Explorer nodes={props.nodes} activePath={props.activePath} rootName={props.rootName} onOpen={props.onOpen} onRefresh={props.onRefreshTree} onOpenWorkspace={props.onOpenWorkspace} width={props.width} />
+        ? <Explorer nodes={props.nodes} activePath={props.activePath} rootName={props.rootName} onOpen={props.onOpen} onRefresh={props.onRefreshTree} onOpenWorkspace={props.onOpenWorkspace} onCreate={props.onCreateEntry} onRename={props.onRenameEntry} onDelete={props.onDeleteEntry} width={props.width} />
         : props.view === "search" ? <SearchView onOpen={props.onOpen} />
         : props.view === "source" ? <SourceView onOpen={props.onOpen} onStatus={props.onStatus} />
         : props.view === "run" ? <RunView />

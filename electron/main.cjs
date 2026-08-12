@@ -1,5 +1,6 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, session } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session } = require("electron");
 const fs = require("node:fs/promises");
+const { existsSync } = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
@@ -7,6 +8,17 @@ let mainWindow;
 let apiServer;
 let apiUrl;
 let workspaceModule;
+
+/**
+ * Window icon for the current system theme: light ink reads on a dark taskbar,
+ * dark ink on a light one. Falls back to the static icon if the pair is
+ * missing, so an older build still starts.
+ */
+function themedIconPath() {
+  const variant = nativeTheme.shouldUseDarkColors ? "icon-light.png" : "icon-dark.png";
+  const themed = path.join(__dirname, "..", "build", variant);
+  return existsSync(themed) ? themed : path.join(__dirname, "..", "build", "icon.png");
+}
 
 function settingsPath() {
   return path.join(app.getPath("userData"), "desktop-settings.json");
@@ -104,7 +116,7 @@ async function createWindow() {
     minHeight: 660,
     show: false,
     frame: false,
-    icon: path.join(__dirname, "..", "build", "icon.png"),
+    icon: themedIconPath(),
     backgroundColor: "#08070a",
     title: "Forge — Local Agent IDE",
     webPreferences: {
@@ -121,6 +133,15 @@ async function createWindow() {
   await mainWindow.loadURL(rendererUrl);
   mainWindow.once("ready-to-show", () => mainWindow.show());
   mainWindow.on("closed", () => { mainWindow = undefined; });
+
+  // The taskbar and title bar sit on the system chrome, so the window icon
+  // follows the system theme: light ink on a dark taskbar, dark ink on a light
+  // one. The icon compiled into the .exe cannot change — Windows has no
+  // theme-variant icon mechanism — so this only affects the running window.
+  nativeTheme.on("updated", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.setIcon(themedIconPath());
+  });
 
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.webContents.on("will-navigate", (event, targetUrl) => {

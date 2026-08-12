@@ -17,7 +17,7 @@ import { CONTEXT_PROFILE_TOKENS, isContextProfileName } from "./model-profile.js
 import { chatWithLocalModel, discoverLocalRuntimes, listLocalModels } from "./providers.js";
 import { listRunManifests, readRunManifest, recoverInterruptedRuns } from "./run-store.js";
 import { readProjectScripts, readWorkspaceStatus, runProjectCheck, searchWorkspace } from "./workbench.js";
-import { buildWorkspaceTree, createSnapshot, readWorkspaceFile, repositoryMap, retrieveEvidence, saveWorkspaceFile, workspaceRoot } from "./workspace.js";
+import { buildWorkspaceTree, createSnapshot, createWorkspaceEntry, deleteWorkspaceEntry, readWorkspaceFile, renameWorkspaceEntry, repositoryMap, retrieveEvidence, saveWorkspaceFile, workspaceRoot } from "./workspace.js";
 import { createTerminal, getTerminal, resizeTerminal, destroyTerminal } from "./terminal.js";
 
 function isProviderConfig(value: unknown): value is ProviderConfig {
@@ -266,6 +266,49 @@ export async function createApiApp(): Promise<Express> {
         editBlocks: typeof body.editBlocks === "boolean" ? body.editBlocks : undefined,
       });
       response.json(await summarizeStore());
+    } catch (error) {
+      response.status(400).json({ error: errorMessage(error) });
+    }
+  });
+
+  app.post("/api/workspace/create", async (request, response) => {
+    try {
+      const { path: relativePath, kind } = request.body as Record<string, unknown>;
+      if (typeof relativePath !== "string" || !relativePath.trim()) {
+        response.status(400).json({ error: "A file or folder name is required." });
+        return;
+      }
+      if (kind !== "file" && kind !== "directory") {
+        response.status(400).json({ error: "kind must be \"file\" or \"directory\"." });
+        return;
+      }
+      response.json({ path: await createWorkspaceEntry(relativePath, kind), kind });
+    } catch (error) {
+      response.status(400).json({ error: errorMessage(error) });
+    }
+  });
+
+  app.post("/api/workspace/rename", async (request, response) => {
+    try {
+      const { from, to } = request.body as Record<string, unknown>;
+      if (typeof from !== "string" || !from.trim() || typeof to !== "string" || !to.trim()) {
+        response.status(400).json({ error: "Both a current path and a new name are required." });
+        return;
+      }
+      response.json({ path: await renameWorkspaceEntry(from, to) });
+    } catch (error) {
+      response.status(400).json({ error: errorMessage(error) });
+    }
+  });
+
+  app.post("/api/workspace/delete", async (request, response) => {
+    try {
+      const { path: relativePath } = request.body as Record<string, unknown>;
+      if (typeof relativePath !== "string" || !relativePath.trim()) {
+        response.status(400).json({ error: "A path is required." });
+        return;
+      }
+      response.json({ path: await deleteWorkspaceEntry(relativePath) });
     } catch (error) {
       response.status(400).json({ error: errorMessage(error) });
     }

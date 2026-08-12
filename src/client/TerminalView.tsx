@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { TERMINAL_THEME, useSystemTheme } from "./theme";
 
 export function TerminalView() {
+  const theme = useSystemTheme();
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -15,11 +17,7 @@ export function TerminalView() {
     const term = new Terminal({
       fontFamily: "'JetBrains Mono', 'Cascadia Code', Consolas, monospace",
       fontSize: 13.5,
-      theme: {
-        background: "#121116",
-        foreground: "#dad8e1",
-        cursor: "#b47aff",
-      },
+      theme: TERMINAL_THEME[theme],
     });
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
@@ -104,6 +102,12 @@ export function TerminalView() {
       term.dispose();
     };
   }, []);
+
+  // The terminal is constructed once, so a later theme change has to be pushed
+  // onto the live instance rather than waiting for a remount.
+  useEffect(() => {
+    if (xtermRef.current) xtermRef.current.options.theme = TERMINAL_THEME[theme];
+  }, [theme]);
 
   return (
     <div className="terminal-container" style={{ height: "100%", width: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}>

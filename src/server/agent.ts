@@ -314,6 +314,25 @@ function resolveSnapshotPath(candidate: string, snapshotByPath: Map<string, Snap
   return withoutRange !== normalized && snapshotByPath.has(withoutRange) ? withoutRange : normalized;
 }
 
+const DELETE_VERBS = new Set(["delete", "remove", "rm", "drop", "unlink", "erase"]);
+
+/**
+ * Resolves the change verb. Models name this field freely — "add", "new",
+ * "update", "Create", "write" — and rejecting the brief over the wording
+ * discards an otherwise correct plan.
+ *
+ * The snapshot is ground truth for create-versus-modify, so that choice is
+ * derived rather than trusted: a declared path that does not exist is a
+ * create, one that does is a modify. A delete is never inferred — it only
+ * happens when the model explicitly asked for one — so a garbled verb can
+ * never escalate into removing a file.
+ */
+function resolveOperation(raw: unknown, exists: boolean): "create" | "modify" | "delete" {
+  const normalized = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (DELETE_VERBS.has(normalized)) return "delete";
+  return exists ? "modify" : "create";
+}
+
 function nearestPaths(candidate: string, snapshotByPath: Map<string, SnapshotEntry>): string[] {
   const basename = candidate.split("/").pop()?.replace(/:\d+(?:-\d+)?$/, "") || "";
   if (!basename) return [];
@@ -385,20 +404,17 @@ function validateBrief(
       errors.push(error instanceof Error ? error.message : `unsafe path for ${change.id}`);
       continue;
     }
-    if (!(["create", "modify", "delete"] as unknown[]).includes(change.operation)) {
-      errors.push(`change ${change.id} has an invalid operation`);
-      continue;
-    }
-    const operation = change.operation as "create" | "modify" | "delete";
     const existing = snapshotByPath.get(safePath);
-    if (operation === "create" && existing) errors.push(`${safePath} already exists and cannot be created`);
-    if (operation !== "create" && !existing) {
+    const operation = resolveOperation(change.operation, Boolean(existing));
+    if (operation === "delete" && !existing) {
       const suggestions = nearestPaths(safePath, snapshotByPath);
-      errors.push(`${safePath} is not a path in the snapshot. Use an exact path with no line range${suggestions.length ? `, such as ${suggestions.join(" or ")}` : ""}.`);
+      errors.push(`${safePath} cannot be deleted because it is not a path in the snapshot. Use an exact path with no line range${suggestions.length ? `, such as ${suggestions.join(" or ")}` : ""}.`);
     }
-    if (operation !== "create" && existing && change.preimage_sha !== existing.sha) {
-      errors.push(`${safePath} preimage_sha must equal ${existing.sha}`);
-    }
+    // preimage_sha is deliberately not compared against the model's value. The
+    // brief returned below carries the snapshot's own hash, and the real
+    // race-detection gates — hydrateTargets before Apply and promote before
+    // the write — both check that hash against the live file. Demanding the
+    // model echo a 64-character digest back only adds a way to fail.
     const referencedEvidence = (stringArray(change.evidence_ids) || []).filter((id) => evidenceIds.has(id));
     if (!referencedEvidence.length && availableEvidence.length) {
       // Planning the right change but failing to echo an opaque evidence id is
@@ -710,13 +726,13 @@ async function gatherBrief(
   "snapshot_id": "${snapshot.id}",
   "objective": "...",
   "evidence": [{"id":"supplied-id","reason":"..."}],
-  "changes": [{"id":"c1","path":"exact/relative/path","operation":"create|modify|delete","intent":"...","preimage_sha":"required exact snapshot sha except create","evidence_ids":["supplied-id"],"depends_on":[]}],
+  "changes": [{"id":"c1","path":"exact/relative/path","operation":"create|modify|delete","intent":"...","evidence_ids":["supplied-id"],"depends_on":[]}],
   "invariants": ["..."],
   "validation": {"required_checks":["..."],"suggested_commands":["..."]},
   "blockers": [],
   "risk": {"level":"low|medium|high","reasons":["..."]}
 }`;
-  const gatherUserPrompt = `Produce the final ExecutionBrief for the task. Return JSON only and follow this shape exactly:\n${schema}\n\nRules:\n- Use only supplied evidence IDs.\n- change.path is the exact value of an evidence path= field, with no line range and no id.\n- preimage_sha is the exact sha= value for that file.\n- Do not target discussion folders.\n- Keep the write set minimal and at or below ${run.budget.maxChangesPerBrief} changes.\n- If blocked, return no changes and at least one blocker.\n- Suggested commands are advisory; trusted infrastructure chooses what runs.\n\nTASK\n${request.prompt}\n\n${repairDiagnostics ? `PREVIOUS VERIFICATION DIAGNOSTICS\n${truncateForBudget(repairDiagnostics, run.budget.diagnostics, "diagnostics")}\n\n` : ""}REPOSITORY EVIDENCE\n${truncateForBudget(evidenceText, run.budget.gatherEvidence, "evidence")}`;
+  const gatherUserPrompt = `Produce the final ExecutionBrief for the task. Return JSON only and follow this shape exactly:\n${schema}\n\nRules:\n- Use only supplied evidence IDs.\n- change.path is a workspace-relative path with no line range and no id. For a file that does not exist yet, write the path you want created.\n- operation is exactly one of create, modify, or delete.\n- Do not target discussion folders.\n- Keep the write set minimal and at or below ${run.budget.maxChangesPerBrief} changes.\n- To build something new, return changes that create the files. Return a blocker only when the task genuinely cannot proceed — never as a substitute for creating a file.\n- Suggested commands are advisory; trusted infrastructure chooses what runs.\n\nTASK\n${request.prompt}\n\n${repairDiagnostics ? `PREVIOUS VERIFICATION DIAGNOSTICS\n${truncateForBudget(repairDiagnostics, run.budget.diagnostics, "diagnostics")}\n\n` : ""}REPOSITORY EVIDENCE\n${truncateForBudget(evidenceText, run.budget.gatherEvidence, "evidence")}`;
 
   let briefRaw = await chatWithLocalModel(
     request.provider,

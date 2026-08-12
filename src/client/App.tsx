@@ -18,6 +18,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Play,
+  RotateCcw,
   Save,
   Search,
   Settings,
@@ -31,7 +32,8 @@ import {
 } from "lucide-react";
 import type { editor } from "monaco-editor";
 import { AgentPanel, type ForgeChatMessage } from "./AgentPanel";
-import { fetchFile, fetchModels, fetchRuntimes, fetchTree, fetchWorkspaceStatus, saveFile, sendChat, streamAgentDecision, streamAgentRun } from "./api";
+import { EDITOR_THEME, useSystemTheme } from "./theme";
+import { createWorkspaceEntry, deleteWorkspaceEntry, fetchFile, fetchModels, fetchRuntimes, fetchTree, fetchWorkspaceStatus, renameWorkspaceEntry, saveFile, sendChat, streamAgentDecision, streamAgentRun } from "./api";
 import { PanelResizer } from "./PanelResizer";
 import { TerminalView } from "./TerminalView";
 import { WorkbenchPanel, type WorkbenchView } from "./WorkbenchPanel";
@@ -45,7 +47,12 @@ import type {
   WorkspaceFile,
 } from "../shared/types";
 
-const forgeIconUrl = new URL("./assets/forge-mark.png", import.meta.url).href;
+// The mark is ink on transparency, so it needs the variant that contrasts with
+// whichever chrome is showing: light ink on the dark theme, dark ink on light.
+const FORGE_MARK = {
+  dark: new URL("./assets/forge-mark-light.png", import.meta.url).href,
+  light: new URL("./assets/forge-mark-dark.png", import.meta.url).href,
+};
 
 const DEFAULTS: Record<ProviderKind, ProviderConfig> = {
   ollama: {
@@ -266,6 +273,7 @@ function SettingsModal({
 }
 
 export default function App() {
+  const theme = useSystemTheme();
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [workspacePath, setWorkspacePath] = useState("");
   const [tabs, setTabs] = useState<WorkspaceFile[]>([]);
@@ -290,6 +298,11 @@ export default function App() {
   // so an Agent v2 run can show what was actually asked, the way chat mode
   // shows the user's message bubble.
   const [runObjective, setRunObjective] = useState("");
+  // Retry guidance is collected in-app rather than through window.prompt,
+  // which throws in Electron ("prompt() is not supported.") and is blocked in
+  // the Code-OSS webview — both shells this UI actually ships in. null keeps
+  // the dialog closed.
+  const [retryGuidance, setRetryGuidance] = useState<string | null>(null);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [chatMessages, setChatMessages] = useState<ForgeChatMessage[]>([]);
   const [agentMode, setAgentMode] = useState<"chat" | "agent">("chat");
@@ -409,6 +422,43 @@ export default function App() {
       setLoadingFile(false);
     }
   }, [tabs]);
+
+  const createWorkspaceItem = useCallback(async (name: string, kind: "file" | "directory") => {
+    const created = await createWorkspaceEntry(name, kind);
+    await refreshTree();
+    // Opening the new file mirrors what every editor does after "New File",
+    // and gives immediate confirmation the path landed where it was meant to.
+    if (kind === "file") await openFile(created.path);
+  }, [refreshTree, openFile]);
+
+  /** Drops open tabs for paths that no longer exist under their old name. */
+  const forgetPaths = useCallback((prefix: string) => {
+    const affected = (tab: WorkspaceFile) => tab.path === prefix || tab.path.startsWith(`${prefix}/`);
+    setTabs((current) => {
+      const remaining = current.filter((tab) => !affected(tab));
+      setActivePath((active) => (active && (active === prefix || active.startsWith(`${prefix}/`))
+        ? remaining.at(-1)?.path
+        : active));
+      return remaining;
+    });
+    setDrafts((current) => Object.fromEntries(
+      Object.entries(current).filter(([key]) => key !== prefix && !key.startsWith(`${prefix}/`)),
+    ));
+  }, []);
+
+  const renameWorkspaceItem = useCallback(async (fromPath: string, toPath: string) => {
+    const renamed = await renameWorkspaceEntry(fromPath, toPath);
+    const wasOpen = tabs.some((tab) => tab.path === fromPath);
+    forgetPaths(fromPath);
+    await refreshTree();
+    if (wasOpen) await openFile(renamed.path);
+  }, [refreshTree, openFile, forgetPaths, tabs]);
+
+  const deleteWorkspaceItem = useCallback(async (targetPath: string) => {
+    await deleteWorkspaceEntry(targetPath);
+    forgetPaths(targetPath);
+    await refreshTree();
+  }, [refreshTree, forgetPaths]);
 
   useEffect(() => {
     if (bootstrappedRef.current) return;
@@ -563,19 +613,13 @@ export default function App() {
     }
   };
 
-  const decideSuspendedRun = async (decision: "approve" | "retry" | "discard") => {
+  const decideSuspendedRun = async (decision: "approve" | "retry" | "discard", guidance?: string) => {
     if (running) return;
     const suspended = events.at(-1);
     const runId = suspended?.kind === "run.suspended" && typeof suspended.data?.runId === "string" ? suspended.data.runId : "";
     if (!runId) {
       setAgentError("The suspended Forge v2 run identifier is unavailable.");
       return;
-    }
-    let guidance: string | undefined;
-    if (decision === "retry") {
-      const entered = window.prompt("Guidance for the fresh Forge v2 retry:", "Address the reported diagnostics without widening the requested scope.");
-      if (entered === null) return;
-      guidance = entered.trim();
     }
     const controller = new AbortController();
     controllerRef.current = controller;
@@ -608,31 +652,18 @@ export default function App() {
       noSemanticValidation: true,
       noSyntaxValidation: false,
     });
-    monaco.editor.defineTheme("forge-dark", {
-      base: "vs-dark",
-      inherit: true,
-      rules: [
-        { token: "comment", foreground: "707080", fontStyle: "italic" },
-        { token: "keyword", foreground: "c38cff" },
-        { token: "string", foreground: "9ad7b0" },
-        { token: "number", foreground: "efb177" },
-        { token: "type.identifier", foreground: "75c8cf" },
-      ],
-      colors: {
-        "editor.background": "#121116",
-        "editor.foreground": "#dad8e1",
-        "editorLineNumber.foreground": "#4d4b58",
-        "editorLineNumber.activeForeground": "#a6a2af",
-        "editorCursor.foreground": "#b47aff",
-        "editor.selectionBackground": "#7042a04d",
-        "editor.lineHighlightBackground": "#18171e",
-        "editorIndentGuide.background1": "#24222c",
-        "editorIndentGuide.activeBackground1": "#484352",
-        "editorGutter.background": "#121116",
-        "scrollbarSlider.background": "#5f596944",
-        "scrollbarSlider.hoverBackground": "#77708066",
-      },
-    });
+    for (const [mode, definition] of Object.entries(EDITOR_THEME)) {
+      monaco.editor.defineTheme(`forge-${mode}`, {
+        base: definition.base,
+        inherit: true,
+        rules: definition.rules,
+        colors: {
+          ...definition.colors,
+          "scrollbarSlider.background": mode === "dark" ? "#5f596944" : "#8b859944",
+          "scrollbarSlider.hoverBackground": mode === "dark" ? "#77708066" : "#6f6a7d66",
+        },
+      });
+    }
   };
 
   const breadcrumb = useMemo(() => activePath?.split("/") || [], [activePath]);
@@ -659,7 +690,7 @@ export default function App() {
     <main className={`page-shell ${desktop ? "desktop" : ""}`}>
       <section className={`ide-window ${editorMaximized ? "editor-maximized" : ""}`}>
         <header className="titlebar">
-          <div className="titlebar-app-name" style={{ paddingLeft: "12px", fontWeight: 750, fontSize: "12px", letterSpacing: "1px", color: "#e3dfe8" }}>FORGE IDE</div>
+          <div className="titlebar-app-name" style={{ paddingLeft: "12px", fontWeight: 750, fontSize: "12px", letterSpacing: "1px", color: "var(--c-n-89)" }}>FORGE IDE</div>
           <div className="nav-controls" />
           <button className="command-center" onClick={() => setCommandOpen(true)}><Search /><span>Search files, symbols, or commands</span><kbd>Ctrl K</kbd></button>
           <div className="titlebar-actions">
@@ -680,14 +711,14 @@ export default function App() {
           <div className="sidebar-container">
             <div className="sidebar-body" style={{ display: "flex", flex: 1, minHeight: 0 }}>
               <nav className="activity-rail">
-                <button className="brand-mark" title="Forge agent" onClick={() => setAgentOpen(true)}><img src={forgeIconUrl} alt="" /></button>
+                <button className="brand-mark" title="Forge agent" onClick={() => setAgentOpen(true)}><img src={FORGE_MARK[theme]} alt="" /></button>
                 <div className="activity-primary">
                   <button className={explorerOpen && workbenchView === "explorer" ? "active" : ""} title="Explorer" onClick={() => activateWorkbench("explorer")}><Files /></button>
                   <button className={explorerOpen && workbenchView === "search" ? "active" : ""} title="Search" onClick={() => activateWorkbench("search")}><Search /></button>
                   <button className={explorerOpen && workbenchView === "source" ? "active" : ""} title="Source control" onClick={() => activateWorkbench("source")}><GitBranch />{workspaceStatus.changes.length > 0 && <i>{workspaceStatus.changes.length}</i>}</button>
                   <button className={explorerOpen && workbenchView === "run" ? "active" : ""} title="Run and checks" onClick={() => activateWorkbench("run")}><Bug /></button>
                   <button className={explorerOpen && workbenchView === "extensions" ? "active" : ""} title="Extensions" onClick={() => activateWorkbench("extensions")}><Blocks /></button>
-                  <button className={agentOpen ? "active" : ""} title="Local agent" onClick={() => setAgentOpen((value) => !value)}><img className="forge-rail-icon" src={forgeIconUrl} alt="" /></button>
+                  <button className={agentOpen ? "active" : ""} title="Local agent" onClick={() => setAgentOpen((value) => !value)}><img className="forge-rail-icon" src={FORGE_MARK[theme]} alt="" /></button>
                 </div>
                 <div className="activity-bottom">
                   <button className={explorerOpen && workbenchView === "security" ? "active" : ""} title="Security policy" onClick={() => activateWorkbench("security")}><ShieldCheck /></button>
@@ -696,7 +727,7 @@ export default function App() {
               </nav>
 
               {explorerOpen && !editorMaximized && (
-                <WorkbenchPanel view={workbenchView} nodes={tree} activePath={activePath} rootName={rootName} width={appliedExplorerWidth} onOpen={(path) => void openFile(path)} onRefreshTree={() => void refreshTree()} onOpenWorkspace={desktop ? () => void openWorkspace() : undefined} onOpenSettings={() => { setSettingsOpen(true); void refreshRuntimes(); }} onStatus={setWorkspaceStatus} />
+                <WorkbenchPanel view={workbenchView} nodes={tree} activePath={activePath} rootName={rootName} width={appliedExplorerWidth} onOpen={(path) => void openFile(path)} onRefreshTree={() => void refreshTree()} onOpenWorkspace={desktop ? () => void openWorkspace() : undefined} onOpenSettings={() => { setSettingsOpen(true); void refreshRuntimes(); }} onStatus={setWorkspaceStatus} onCreateEntry={createWorkspaceItem} onRenameEntry={renameWorkspaceItem} onDeleteEntry={deleteWorkspaceItem} />
               )}
             </div>
           </div>
@@ -735,7 +766,7 @@ export default function App() {
                   language={activeFile.language}
                   value={activeDraft}
                   beforeMount={beforeMount}
-                  theme="forge-dark"
+                  theme={`forge-${theme}`}
                   onChange={(value) => setDrafts((current) => ({ ...current, [activeFile.path]: value ?? "" }))}
                   options={{
                     fontFamily: "'JetBrains Mono', 'Cascadia Code', Consolas, monospace",
@@ -760,7 +791,7 @@ export default function App() {
                   language={activeFile.language}
                   value={activeDraft}
                   beforeMount={beforeMount}
-                  theme="forge-dark"
+                  theme={`forge-${theme}`}
                   onChange={(value) => setDrafts((current) => ({ ...current, [activeFile.path]: value ?? "" }))}
                   options={{
                     fontFamily: "'JetBrains Mono', 'Cascadia Code', Consolas, monospace",
@@ -784,10 +815,10 @@ export default function App() {
             </div>
 
             {terminalOpen && (
-              <div className="bottom-panel" style={{ borderTop: "1px solid #24222a", display: "flex", flexDirection: "column", background: "#121116", minHeight: 0 }}>
-                <div style={{ height: "34px", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 12px", borderBottom: "1px solid #201e25" }}>
-                  <span style={{ fontSize: "11px", fontWeight: 650, color: "#888491", textTransform: "uppercase", letterSpacing: "1px" }}>Terminal</span>
-                  <button onClick={() => setTerminalOpen(false)} style={{ color: "#6f6b76", background: "none", border: "none", cursor: "pointer", display: "grid", placeItems: "center" }}><X size={14} /></button>
+              <div className="bottom-panel" style={{ borderTop: "1px solid var(--c-n-15)", display: "flex", flexDirection: "column", background: "var(--c-n-08)", minHeight: 0 }}>
+                <div style={{ height: "34px", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 12px", borderBottom: "1px solid var(--c-n-12)" }}>
+                  <span style={{ fontSize: "11px", fontWeight: 650, color: "var(--c-n-54)", textTransform: "uppercase", letterSpacing: "1px" }}>Terminal</span>
+                  <button onClick={() => setTerminalOpen(false)} style={{ color: "var(--c-n-44)", background: "none", border: "none", cursor: "pointer", display: "grid", placeItems: "center" }}><X size={14} /></button>
                 </div>
                 <div style={{ flex: 1, minHeight: 0 }}>
                   <TerminalView />
@@ -830,7 +861,13 @@ export default function App() {
               onModeChange={setAgentMode}
               onRefreshModels={() => void refreshRuntimes()}
               onNewSession={() => { if (!running) { setEvents([]); setChatMessages([]); setAgentError(undefined); setTask(""); setRunObjective(""); } }}
-              onDecision={(decision) => void decideSuspendedRun(decision)}
+              onDecision={(decision) => {
+                if (decision === "retry") {
+                  setRetryGuidance("Address the reported diagnostics without widening the requested scope.");
+                  return;
+                }
+                void decideSuspendedRun(decision);
+              }}
             />
           )}
         </div>
@@ -860,6 +897,50 @@ export default function App() {
               {!commandFiles.length && <div className="command-empty">No matching files.</div>}
             </div>
           </section>
+        </div>
+      )}
+
+      {retryGuidance !== null && (
+        <div className="modal-backdrop" onMouseDown={() => setRetryGuidance(null)}>
+          <div className="settings-modal guidance-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <div><span className="settings-icon"><RotateCcw /></span><div><h2>Retry the suspended task</h2><p>Forge restarts from a fresh snapshot.</p></div></div>
+              <button onClick={() => setRetryGuidance(null)}><X /></button>
+            </header>
+            <div className="settings-form">
+              <label>
+                <span>Guidance for the retry</span>
+                <textarea
+                  autoFocus
+                  rows={4}
+                  value={retryGuidance}
+                  onChange={(event) => setRetryGuidance(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                      const guidance = retryGuidance.trim();
+                      setRetryGuidance(null);
+                      void decideSuspendedRun("retry", guidance || undefined);
+                    }
+                  }}
+                  placeholder="Tell Forge what to do differently…"
+                />
+                <small>Sent to a fresh Gather cycle. Ctrl ↵ to retry.</small>
+              </label>
+            </div>
+            <footer>
+              <button className="secondary" onClick={() => setRetryGuidance(null)}>Cancel</button>
+              <button
+                className="primary"
+                onClick={() => {
+                  const guidance = retryGuidance.trim();
+                  setRetryGuidance(null);
+                  void decideSuspendedRun("retry", guidance || undefined);
+                }}
+              >
+                Retry task
+              </button>
+            </footer>
+          </div>
         </div>
       )}
 

@@ -436,6 +436,73 @@ export async function removeStagesForRun(runId: string): Promise<void> {
   }
 }
 
+export type WorkspaceEntryKind = "file" | "directory";
+
+/**
+ * Creates an empty file or a directory inside the workspace.
+ *
+ * Refuses to touch a path that already exists, so a mistyped name can never
+ * silently blank an existing file — unlike saveWorkspaceFile, which is an
+ * overwrite by design. Path safety is the same gate the agent writes through:
+ * no traversal, and nothing inside an ignored tree such as .git or
+ * node_modules.
+ */
+export async function createWorkspaceEntry(relativePath: string, kind: WorkspaceEntryKind): Promise<string> {
+  const safe = assertSafeRelativePath(relativePath.replace(/[\\/]+$/, ""));
+  const absolute = absoluteWorkspacePath(safe);
+  if (await pathExists(absolute)) throw new Error(`${safe} already exists.`);
+
+  if (kind === "directory") {
+    await fs.mkdir(absolute, { recursive: true });
+    return safe;
+  }
+
+  await fs.mkdir(path.dirname(absolute), { recursive: true });
+  // "wx" fails rather than truncating if the path appeared between the check
+  // above and this write.
+  await fs.writeFile(absolute, "", { encoding: "utf8", flag: "wx" });
+  return safe;
+}
+
+/**
+ * Renames or moves an entry. Both ends go through the same path gate, so a
+ * rename can neither reach outside the workspace nor land in an ignored tree,
+ * and an existing destination is refused rather than replaced.
+ */
+export async function renameWorkspaceEntry(fromPath: string, toPath: string): Promise<string> {
+  const from = assertSafeRelativePath(fromPath.replace(/[\\/]+$/, ""));
+  const to = assertSafeRelativePath(toPath.replace(/[\\/]+$/, ""));
+  if (from === to) return to;
+
+  const absoluteFrom = absoluteWorkspacePath(from);
+  const absoluteTo = absoluteWorkspacePath(to);
+  if (!await pathExists(absoluteFrom)) throw new Error(`${from} no longer exists.`);
+  if (await pathExists(absoluteTo)) throw new Error(`${to} already exists.`);
+  // Moving a directory inside itself would detach the subtree.
+  if (`${absoluteTo}${path.sep}`.startsWith(`${absoluteFrom}${path.sep}`)) {
+    throw new Error(`${from} cannot be moved inside itself.`);
+  }
+
+  await fs.mkdir(path.dirname(absoluteTo), { recursive: true });
+  await fs.rename(absoluteFrom, absoluteTo);
+  return to;
+}
+
+/**
+ * Deletes a file, or a directory and everything under it. Irreversible, so the
+ * caller is expected to have confirmed with the user first.
+ */
+export async function deleteWorkspaceEntry(relativePath: string): Promise<string> {
+  const safe = assertSafeRelativePath(relativePath.replace(/[\\/]+$/, ""));
+  const absolute = absoluteWorkspacePath(safe);
+  if (!await pathExists(absolute)) throw new Error(`${safe} no longer exists.`);
+  if (path.resolve(absolute) === path.resolve(workspaceRoot())) {
+    throw new Error("The workspace root cannot be deleted.");
+  }
+  await fs.rm(absolute, { recursive: true, force: true });
+  return safe;
+}
+
 export async function fileExistsInWorkspace(relativePath: string): Promise<boolean> {
   return pathExists(absoluteWorkspacePath(relativePath));
 }

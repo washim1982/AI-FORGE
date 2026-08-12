@@ -86,6 +86,8 @@
       "dist-server/**/*",
       "electron/**/*",
       "build/icon.png",
+      "build/icon-light.png",
+      "build/icon-dark.png",
       "package.json"
     ],
     "win": {

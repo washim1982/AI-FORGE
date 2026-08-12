@@ -14,9 +14,24 @@ import type {
 } from "../shared/types";
 
 async function jsonResponse<T>(response: Response): Promise<T> {
-  const payload = (await response.json()) as T & { error?: string };
-  if (!response.ok) throw new Error(payload.error || `Request failed with ${response.status}`);
-  return payload;
+  const body = await response.text();
+  let payload: (T & { error?: string }) | undefined;
+  try {
+    payload = body ? (JSON.parse(body) as T & { error?: string }) : undefined;
+  } catch {
+    // A non-JSON body means the request never reached a route handler — an
+    // HTML error page, a dev-proxy failure, or an API server older than the
+    // client. Reporting the parse error would hide all of that.
+    if (response.status === 404) {
+      throw new Error(
+        `This build of the Forge API does not have ${new URL(response.url, location.origin).pathname}. `
+        + "Restart the app so the server rebuilds — in forge:desktop:dev the API is built once at launch and does not hot-reload.",
+      );
+    }
+    throw new Error(`Request failed with ${response.status} and a non-JSON response.`);
+  }
+  if (!response.ok) throw new Error(payload?.error || `Request failed with ${response.status}`);
+  return payload as T;
 }
 
 export async function fetchTree(): Promise<{ nodes: TreeNode[]; root: string }> {
@@ -32,6 +47,30 @@ export async function saveFile(file: WorkspaceFile, content: string): Promise<Wo
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ path: file.path, content, expectedSha: file.sha }),
+  }));
+}
+
+export async function createWorkspaceEntry(path: string, kind: "file" | "directory"): Promise<{ path: string; kind: "file" | "directory" }> {
+  return jsonResponse(await fetch("/api/workspace/create", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path, kind }),
+  }));
+}
+
+export async function renameWorkspaceEntry(from: string, to: string): Promise<{ path: string }> {
+  return jsonResponse(await fetch("/api/workspace/rename", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ from, to }),
+  }));
+}
+
+export async function deleteWorkspaceEntry(path: string): Promise<{ path: string }> {
+  return jsonResponse(await fetch("/api/workspace/delete", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path }),
   }));
 }
 
