@@ -214,10 +214,31 @@ function pathListing(snapshot: WorkspaceSnapshot, taskText: string, limit: numbe
     .join("\n");
 }
 
-function validateTaskPlan(value: unknown, objective: string, maxTasks: number): TaskPlan {
+/**
+ * Finds the task list in whatever shape the model returned. Models wrap it
+ * under their own key, hand back a bare array, or return a single task object;
+ * none of that changes the plan's meaning, so it is unwrapped rather than
+ * rejected.
+ */
+function extractTaskList(value: unknown): unknown[] | null {
+  if (Array.isArray(value)) return value;
   const record = asRecord(value);
-  if (!record) throw new Error("The Forge v2 plan must be a JSON object.");
-  const rawTasks = Array.isArray(record.tasks) ? record.tasks : null;
+  if (!record) return null;
+  for (const key of ["tasks", "plan", "steps", "items", "subtasks", "task_list"]) {
+    const candidate = record[key];
+    if (Array.isArray(candidate) && candidate.length) return candidate;
+    // "plan": { "tasks": [...] } is common enough to be worth one level.
+    const nested = asRecord(candidate);
+    if (nested && Array.isArray(nested.tasks) && nested.tasks.length) return nested.tasks;
+  }
+  // A lone task object, unwrapped.
+  if (typeof record.title === "string" || typeof record.objective === "string") return [record];
+  return null;
+}
+
+function validateTaskPlan(value: unknown, objective: string, maxTasks: number): TaskPlan {
+  const record = asRecord(value) || {};
+  const rawTasks = extractTaskList(value);
   if (!rawTasks?.length) throw new Error("The Forge v2 plan must contain at least one task.");
 
   const tasks: ForgeTask[] = [];
@@ -622,7 +643,28 @@ async function planTasks(
       ],
       signal,
     );
-    return validateTaskPlan(parseModelJson(raw), request.prompt, maxTasks);
+    try {
+      return validateTaskPlan(parseModelJson(raw), request.prompt, maxTasks);
+    } catch (secondError) {
+      // Decomposition is an optimisation, not a safety gate: every write still
+      // goes through Gather, the write-set check, staging, and verification.
+      // Losing the whole run because a model could not shape a task list is a
+      // worse outcome than running the goal as one task, so that is the floor.
+      const reason = secondError instanceof Error ? secondError.message : "Invalid planner response";
+      return {
+        tasks: [{
+          id: "task-1",
+          title: request.prompt.split(/(?<=[.!?])\s/)[0].slice(0, 120) || "Complete the requested change",
+          objective: request.prompt,
+          scope_hint: [],
+          acceptance_criteria: ["The requested change is implemented", "Every configured deterministic check still passes"],
+          depends_on: [],
+          status: "pending",
+          attempts: 0,
+        }],
+        reasoning_summary: `The planner did not return a usable task list (${reason}). Running the goal as a single bounded task.`,
+      };
+    }
   }
 }
 

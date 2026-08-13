@@ -297,3 +297,25 @@ async function pathIsPresent(target: string): Promise<boolean> {
     return false;
   }
 }
+
+test("the planner accepts the shapes models actually return", () => {
+  const task = { title: "Create the script", objective: "Write hello.py", acceptance_criteria: ["It runs"] };
+
+  // A bare array, the model's own wrapper key, a nested wrapper, and a single
+  // unwrapped task all describe the same plan.
+  for (const shape of [
+    [task],
+    { tasks: [task] },
+    { plan: [task] },
+    { steps: [task] },
+    { plan: { tasks: [task] } },
+    task,
+  ]) {
+    const plan = __testables.validateTaskPlan(shape, "Write hello.py", 4);
+    assert.equal(plan.tasks.length, 1, `shape ${JSON.stringify(shape).slice(0, 40)}`);
+    assert.equal(plan.tasks[0].objective, "Write hello.py");
+  }
+
+  assert.throws(() => __testables.validateTaskPlan({ tasks: [] }, "x", 4), /at least one task/i);
+  assert.throws(() => __testables.validateTaskPlan({ notes: "no plan here" }, "x", 4), /at least one task/i);
+});
