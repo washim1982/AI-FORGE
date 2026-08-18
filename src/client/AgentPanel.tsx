@@ -25,7 +25,7 @@ import {
   XCircle,
 } from "lucide-react";
 import MarkdownIt from "markdown-it";
-import type { AgentEvent, ForgeRunManifest, ProviderConfig, ProviderKind, RuntimeStatus } from "../shared/types";
+import type { AgentEvent, AgentRouteDecision, ForgeRunManifest, ProviderConfig, ProviderKind, RuntimeStatus } from "../shared/types";
 import { fetchAgentRuns } from "./api";
 import { Dropdown } from "./Dropdown";
 
@@ -49,7 +49,8 @@ interface AgentPanelProps {
   /** The prompt that started the current Agent v2 run, shown above its timeline. */
   objective: string;
   messages: ForgeChatMessage[];
-  mode: "chat" | "agent";
+  mode: "auto" | "chat" | "agent";
+  routeDecision?: AgentRouteDecision;
   running: boolean;
   config: ProviderConfig;
   task: string;
@@ -61,7 +62,7 @@ interface AgentPanelProps {
   onOpenSettings: () => void;
   onProviderChange: (kind: ProviderKind) => void;
   onModelChange: (model: string) => void;
-  onModeChange: (mode: "chat" | "agent") => void;
+  onModeChange: (mode: "auto" | "chat" | "agent") => void;
   onRefreshModels: () => void;
   onNewSession: () => void;
   onDecision: (decision: "approve" | "retry" | "discard") => void;
@@ -126,7 +127,20 @@ function ObjectiveCard({ objective }: { objective: string }) {
   );
 }
 
-function EmptySession({ mode }: { mode: "chat" | "agent" }) {
+function EmptySession({ mode }: { mode: "auto" | "chat" | "agent" }) {
+  if (mode === "auto") {
+    return (
+      <div className="empty-session">
+        <div className="empty-orbit"><Sparkles /><span /></div>
+        <h3>Auto Agent</h3>
+        <p>Describe the outcome once. Forge routes clear requests to conversation, read-only review, or the transactional coding agent—and asks before acting on ambiguous intent.</p>
+        <div className="architecture-mini">
+          <span><MessageSquare /> Chat</span><i /><span><SearchCode /> Review</span><i /><span><Braces /> Build / Fix</span>
+        </div>
+        <div className="safety-note"><ShieldCheck /> Weighted signals · repair gating · abstain on near ties</div>
+      </div>
+    );
+  }
   return (
     <div className="empty-session">
       <div className="empty-orbit"><Sparkles /><span /></div>
@@ -166,6 +180,7 @@ export function AgentPanel({
   objective,
   messages,
   mode,
+  routeDecision,
   running,
   config,
   task,
@@ -187,18 +202,21 @@ export function AgentPanel({
   const [runHistory, setRunHistory] = useState<ForgeRunManifest[]>([]);
   const [historyError, setHistoryError] = useState("");
   const lastEventId = events.at(-1)?.id;
+  const conversationSurface = mode === "chat" || (mode === "auto" && routeDecision?.target !== "agent");
   const suspension = events.at(-1)?.kind === "run.suspended" ? events.at(-1) : undefined;
   const allowedActions = Array.isArray(suspension?.data?.allowedActions)
     ? suspension.data.allowedActions.filter((item): item is "approve" | "retry" | "discard" => ["approve", "retry", "discard"].includes(String(item)))
     : [];
   const statusLabel = useMemo(() => {
-    if (running) return mode === "chat" ? "Generating locally" : "Autopilot running";
+    if (running) return mode === "chat" ? "Generating locally" : mode === "auto" ? "Auto Agent routing" : "Autopilot running";
     if (mode === "chat") return "Chat ready";
+    if (mode === "auto" && routeDecision?.intent === "CLARIFY") return "Clarification required";
     if (events.at(-1)?.kind === "run.suspended") return "Human decision required";
     if (events.at(-1)?.kind === "run.completed") return "Task complete";
     if (events.at(-1)?.kind === "run.failed") return "Stopped safely";
+    if (mode === "auto" && routeDecision) return `${routeDecision.intent.toLowerCase()} route ready`;
     return "Ready";
-  }, [events, mode, running]);
+  }, [events, mode, routeDecision, running]);
   const toggleHistory = async () => {
     const opening = !historyOpen;
     setHistoryOpen(opening);
@@ -224,7 +242,7 @@ export function AgentPanel({
       <div className="agent-statusbar">
         <span className={`status-pulse ${running ? "live" : ""}`} />
         <span>{statusLabel}</span>
-        <span className="context-badge">{mode === "chat" ? "Chat" : "Forge v2"}</span>
+        <span className="context-badge">{mode === "chat" ? "Chat" : mode === "auto" ? routeDecision ? `Auto · ${routeDecision.intent}` : "Auto Agent" : "Forge v2"}</span>
       </div>
       <div className="agent-scroll">
         {historyOpen ? <div className="run-history">
@@ -232,7 +250,7 @@ export function AgentPanel({
           {historyError && <div className="inline-error"><XCircle />{historyError}</div>}
           {!historyError && !runHistory.length && <div className="panel-empty">No persisted agent runs yet.</div>}
           {runHistory.map((run) => <article key={run.runId}><div><strong>{run.objective}</strong><span className={`run-status ${run.status}`}>{run.status}</span></div><small>{run.tasks.filter((task) => task.status === "completed").length}/{run.tasks.length} tasks · {new Date(run.updatedAt).toLocaleString()}</small></article>)}
-        </div> : mode === "chat" ? (messages.length ? <ChatTimeline messages={messages} /> : <EmptySession mode={mode} />) : events.length === 0 ? <EmptySession mode={mode} /> : <>
+        </div> : conversationSurface ? (messages.length ? <ChatTimeline messages={messages} /> : <EmptySession mode={mode} />) : events.length === 0 ? <EmptySession mode={mode} /> : <>
           {objective && <ObjectiveCard objective={objective} />}
           {events.map((item) => (
             <TimelineEvent key={item.id} event={item} last={item.id === lastEventId} active={running && item.id === lastEventId} />
@@ -296,9 +314,10 @@ export function AgentPanel({
             </div>
             <Dropdown
               value={mode}
-              onChange={(value) => onModeChange(value as "chat" | "agent")}
+              onChange={(value) => onModeChange(value as "auto" | "chat" | "agent")}
               disabled={running}
               options={[
+                { value: "auto", label: "Auto Agent", description: "routes and abstains safely" },
                 { value: "chat", label: "Chat", description: "conversation only" },
                 { value: "agent", label: "Agent v2", description: "transactional agent" }
               ]}
@@ -315,7 +334,7 @@ export function AgentPanel({
             </button>
           </div>
         </div>
-        <div className="composer-caption">Ctrl ↵ to send · {mode === "chat" ? "conversation only" : "transactional agent"} · local inference</div>
+        <div className="composer-caption">Ctrl ↵ to send · {mode === "chat" ? "conversation only" : mode === "auto" ? "intent-routed agent" : "transactional agent"} · local inference</div>
       </div>
     </aside>
   );

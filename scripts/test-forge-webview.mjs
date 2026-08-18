@@ -27,6 +27,8 @@ assert.ok(browserScript.includes("createElement(isResponse ? 'details' : 'div')"
 assert.ok(browserScript.includes("className = 'code-block'"), "Fenced code-block rendering is missing.");
 assert.ok(browserScript.includes("event.kind === 'run.suspended'"), "Forge v2 suspension actions are missing.");
 assert.ok(browserScript.includes("type: 'decision'"), "Forge v2 human-decision messaging is missing.");
+assert.ok(source.includes('value="default">Auto Agent</option>'), "Auto Agent mode is missing.");
+assert.ok(browserScript.includes("data.type === 'agentRoute'"), "Auto Agent route rendering is missing.");
 assert.equal(browserScript.includes(".innerHTML"), false, "Model output must not be inserted as raw HTML.");
 assert.ok(source.includes(".code-block code { display: block; padding: 0;"), "Block code must override inherited inline-code decoration.");
 assert.ok(source.includes("background: transparent !important; box-shadow: none !important;"), "Block code background/shadow reset is missing.");

@@ -49,6 +49,27 @@ try {
   const runtimes = await runtimesResponse.json();
   assert.equal(Array.isArray(runtimes.runtimes), true);
   assert.equal(runtimes.runtimes.length, 3);
+
+  const routeResponse = await fetch(`${apiUrl}/api/agent/route`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ prompt: "Build an error-handling middleware for the API" }),
+  });
+  assert.equal(routeResponse.status, 200);
+  const route = await routeResponse.json();
+  assert.equal(route.decision.intent, "CREATE");
+  assert.equal(route.decision.target, "agent");
+  assert.equal(route.decision.tier, "heuristic");
+
+  const abstainResponse = await fetch(`${apiUrl}/api/agent/route`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ prompt: "Make it better" }),
+  });
+  assert.equal(abstainResponse.status, 200);
+  const abstain = await abstainResponse.json();
+  assert.equal(abstain.decision.intent, "CLARIFY");
+  assert.equal(typeof abstain.decision.question, "string");
   console.log(`Forge worker integration passed at ${apiUrl}; ${runtimes.runtimes.filter((item) => item.reachable).length}/3 runtimes reachable.`);
 } finally {
   await worker.terminate();

@@ -1,6 +1,8 @@
 import type {
   AgentEvent,
   AgentDecisionRequest,
+  AgentReviewResult,
+  AgentRouteDecision,
   AgentRunRequest,
   ForgeRunManifest,
   ProjectCheckResult,
@@ -101,6 +103,33 @@ export async function sendChat(
     signal,
   }));
   return payload.message;
+}
+
+export async function routeAgentPrompt(
+  prompt: string,
+  provider: ProviderConfig,
+  signal: AbortSignal,
+): Promise<AgentRouteDecision> {
+  const payload = await jsonResponse<{ decision: AgentRouteDecision }>(await fetch("/api/agent/route", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ prompt, provider }),
+    signal,
+  }));
+  return payload.decision;
+}
+
+export async function reviewWorkspace(
+  prompt: string,
+  provider: ProviderConfig,
+  signal: AbortSignal,
+): Promise<AgentReviewResult> {
+  return jsonResponse<AgentReviewResult>(await fetch("/api/agent/review", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ prompt, provider }),
+    signal,
+  }));
 }
 
 export async function searchWorkspace(query: string, signal?: AbortSignal): Promise<WorkspaceSearchResult[]> {

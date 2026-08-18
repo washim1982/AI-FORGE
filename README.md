@@ -9,6 +9,8 @@ Forge v2 is a native Windows coding-assistant IDE for local/open-weight models. 
 - Electron + React + Monaco Windows IDE with native folder selection, multi-tab editing, frameless window controls, save conflict detection, local-model settings, and a live agent event timeline.
 - Local adapters for **Ollama**, **LM Studio**, and **llama.cpp**. The API accepts loopback endpoints only.
 - Automatic runtime discovery on ports `11434`, `1234`, and `8080`; Forge selects a model that is actually available instead of assuming a model name.
+- **Auto Agent** uses one prompt box and a shared weighted router for CHAT / CREATE / FIX / RESEARCH / LEARN. Failure artifacts outweigh verbs, credible repair evidence gates creation, and low-confidence or near-tied requests ask for clarification instead of guessing. A local constrained-JSON classifier is consulted only when the free deterministic tier abstains.
+- Auto Agent keeps the execution boundary narrow: CREATE and FIX delegate to transactional Agent v2, RESEARCH uses source-only read access, and CHAT / LEARN never receive workspace mutation tools.
 - Strict planner output, bounded task queues, explicit acceptance criteria, and one bounded replan when aggregate verification fails.
 - Repository snapshot and per-file SHA-256 preconditions.
 - Bounded lexical/structural-context retrieval with focused evidence regions.
@@ -136,6 +138,10 @@ distribution) patched with Forge branding and the built-in Forge extension. It
 is not installed system-wide. User data and extensions live under `.forge/`, so
 existing Visual Studio Code, VSCodium, and Forge profiles are not changed.
 
+The default **Auto Agent** mode in the Code-OSS composer shares the same intent
+router as the original Forge shell. Explicit Chat and Agent v2 modes remain
+available when you want to bypass automatic routing.
+
 Open VSX is configured as the extension gallery. You can also use **Extensions:
 Install from VSIX...** from the Command Palette or Extensions view. The
 standalone Forge extension is produced at `release/forge-agent-0.5.0.vsix`.
@@ -167,9 +173,10 @@ The original Electron/React/Monaco interface remains supported as the focused
 Forge experience. It includes the Forge v2 chat, local runtime/model selection,
 task plan and event timeline, suspension decisions, repository tree, editor,
 runtime settings, workspace content search, Git status, trusted project checks,
-file navigation history, split/maximized editing, and a command palette. Chat
-mode handles ordinary Markdown conversations; Agent v2 is selected explicitly
-for autonomous coding transactions. Code-OSS remains the full-workbench option
+file navigation history, split/maximized editing, and a command palette. Auto
+Agent is the default and routes requests by intent; Chat remains conversation-
+only, while Agent v2 can still be selected explicitly for autonomous coding
+transactions. Code-OSS remains the full-workbench option
 for debugging, terminals, language services, keybindings, and VSIX/Open VSX
 extensions.
 

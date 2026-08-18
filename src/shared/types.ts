@@ -17,6 +17,32 @@ export interface RuntimeStatus {
   error?: string;
 }
 
+export type AgentIntent = "CHAT" | "CREATE" | "FIX" | "RESEARCH" | "LEARN" | "CLARIFY";
+
+export type AgentExecutionTarget = "chat" | "review" | "agent" | "clarify";
+
+export interface AgentRouteDecision {
+  intent: AgentIntent;
+  target: AgentExecutionTarget;
+  confidence: number;
+  rationale: string;
+  scores: Partial<Record<Exclude<AgentIntent, "CLARIFY">, number>>;
+  tier: "heuristic" | "model" | "human";
+  question?: string;
+}
+
+export interface AgentRouteRequest {
+  prompt: string;
+  provider?: ProviderConfig;
+}
+
+export interface AgentReviewResult {
+  message: string;
+  snapshotId: string;
+  fileCount: number;
+  evidenceCount: number;
+}
+
 export interface WorkspaceSearchResult {
   path: string;
   line: number;

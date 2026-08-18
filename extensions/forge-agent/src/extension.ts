@@ -34,6 +34,15 @@ interface AgentEvent {
   data?: Record<string, unknown>;
 }
 
+interface AgentRouteDecision {
+  intent: "CHAT" | "CREATE" | "FIX" | "RESEARCH" | "LEARN" | "CLARIFY";
+  target: "chat" | "review" | "agent" | "clarify";
+  confidence: number;
+  rationale: string;
+  tier: "heuristic" | "model" | "human";
+  question?: string;
+}
+
 interface WebviewMessage {
   type?: unknown;
   text?: unknown;
@@ -104,19 +113,6 @@ function conversationHistory(value: unknown): ConversationMessage[] {
     })
     .slice(-12)
     .map((message) => ({ role: message.role, content: message.content.slice(0, 20_000) }));
-}
-
-function shouldUseConversation(prompt: string, mode: unknown): boolean {
-  if (mode === "chat") return true;
-  if (mode === "agent") return false;
-  return /^(hi|hello|hey|good\s+(morning|afternoon|evening)|thanks|thank\s+you)[\s!.,?]*$/i.test(prompt.trim());
-}
-
-function shouldUseReview(prompt: string, mode: unknown): boolean {
-  if (mode === "chat") return false;
-  const readOnlyIntent = /\b(review|analy[sz]e|inspect|audit|explain|summari[sz]e|suggest|recommend|assess)\b/i.test(prompt);
-  const mutationIntent = /\b(implement|change|fix|add|create|update|remove|delete|rename|refactor|rewrite|install|build)\b/i.test(prompt);
-  return readOnlyIntent && !mutationIntent;
 }
 
 class ForgeSidecar implements vscode.Disposable {
@@ -367,7 +363,19 @@ class ForgeViewProvider implements vscode.WebviewViewProvider, vscode.Disposable
       if (!isProviderConfig(message.provider)) {
         throw new Error("Select a reachable local runtime and model first.");
       }
-      if (shouldUseConversation(prompt, message.mode)) {
+      let target: AgentRouteDecision["target"] = message.mode === "chat" ? "chat" : "agent";
+      if (message.mode === "default") {
+        const decision = await this.routePrompt(prompt, message.provider);
+        target = decision.target;
+        if (target === "clarify") {
+          void this.view?.webview.postMessage({
+            type: "chatResponse",
+            message: `### Clarification needed\n\n${decision.question || "Should Forge modify files, diagnose a failure, review the workspace, or only explain?"}`,
+          });
+          return;
+        }
+      }
+      if (target === "chat") {
         await this.runChat(prompt, message.provider, conversationHistory(message.history));
         return;
       }
@@ -375,7 +383,7 @@ class ForgeViewProvider implements vscode.WebviewViewProvider, vscode.Disposable
         await vscode.commands.executeCommand("workbench.trust.manage");
         throw new Error("Trust this workspace before Forge can inspect, validate, or modify repository files.");
       }
-      if (shouldUseReview(prompt, message.mode)) {
+      if (target === "review") {
         await this.runReview(prompt, message.provider);
         return;
       }
@@ -383,6 +391,33 @@ class ForgeViewProvider implements vscode.WebviewViewProvider, vscode.Disposable
       const requestedCycles = typeof message.maxRepairCycles === "number" ? message.maxRepairCycles : undefined;
       const configuredCycles = vscode.workspace.getConfiguration().get<number>("forge.maxRepairCycles", 1);
       await this.runAgent(prompt, message.provider, Math.max(0, Math.min(3, requestedCycles ?? configuredCycles)));
+    }
+  }
+
+  private async routePrompt(prompt: string, provider: ProviderConfig): Promise<AgentRouteDecision> {
+    if (this.running) throw new Error("A Forge request is already running.");
+    this.running = true;
+    this.controller = new AbortController();
+    this.statusBar.text = "$(sync~spin) Forge: routing";
+    void this.view?.webview.postMessage({ type: "runState", running: true });
+    this.output.appendLine(`[auto] Routing request with ${provider.kind}/${provider.model}`);
+    try {
+      const response = await this.sidecar.request("/api/agent/route", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt, provider }),
+        signal: this.controller.signal,
+      });
+      const payload = (await response.json().catch(() => ({}))) as { decision?: AgentRouteDecision; error?: string };
+      if (!response.ok || !payload.decision) throw new Error(payload.error || `Auto Agent routing failed (${response.status}).`);
+      this.output.appendLine(`[auto] ${payload.decision.tier} route -> ${payload.decision.intent}`);
+      void this.view?.webview.postMessage({ type: "agentRoute", decision: payload.decision, prompt });
+      return payload.decision;
+    } finally {
+      this.running = false;
+      this.controller = undefined;
+      this.statusBar.text = this.sidecarState === "ready" ? "$(sparkle) Forge: ready" : `$(circle-outline) Forge: ${this.sidecarState}`;
+      void this.view?.webview.postMessage({ type: "runState", running: false });
     }
   }
 
@@ -798,7 +833,7 @@ function webviewHtml(): string {
     .toolbar-select { width: auto; height: 24px; min-width: 0; padding: 0 16px 0 3px; color: var(--vscode-foreground); border: 0; background: transparent; font-size: 11px; }
     #runtime { max-width: 72px; }
     #model { max-width: 132px; }
-    #mode { max-width: 62px; }
+    #mode { max-width: 82px; }
     #run { position: absolute; top: 8px; right: 8px; width: 28px; min-height: 28px; padding: 0; border-radius: 8px; font-size: 17px; line-height: 28px; }
     #cancel { width: auto; min-height: 24px; padding: 0 5px; font-size: 11px; }
     .status-button { display: grid; place-items: center; width: 18px; min-height: 24px; padding: 0; background: transparent; }
@@ -835,7 +870,7 @@ function webviewHtml(): string {
       <select id="runtime" class="toolbar-select" aria-label="Local runtime"></select>
       <select id="model" class="toolbar-select" aria-label="Local model"><option value="">Detecting...</option></select>
       <span class="toolbar-spacer"></span>
-      <select id="mode" class="toolbar-select" aria-label="Agent mode"><option value="default">Default</option><option value="chat">Chat</option><option value="agent">Agent v2</option></select>
+      <select id="mode" class="toolbar-select" aria-label="Agent mode"><option value="default">Auto Agent</option><option value="chat">Chat</option><option value="agent">Agent v2</option></select>
       <label class="toggle-label" title="Allow bounded automatic repair cycles"><span>Autopilot</span><input id="autopilot" type="checkbox" checked><span class="toggle-track"></span></label>
       <button id="cancel" class="secondary">Stop</button>
       <button id="collapseResponses" class="toolbar-button" title="Collapse all responses" aria-label="Collapse all responses">&#8648;</button>
@@ -1215,7 +1250,7 @@ function webviewHtml(): string {
       if (!workspaceState.trusted && modeSelect.value === 'agent') return vscode.postMessage({ type: 'trust' });
       const runtime = currentRuntime();
       if (!runtime || !modelSelect.value) return showError('Select a reachable runtime and model.');
-      const isConversation = modeSelect.value === 'chat' || (modeSelect.value === 'default' && /^(hi|hello|hey|good\s+(morning|afternoon|evening)|thanks|thank\s+you)[\s!.,?]*$/i.test(prompt.value.trim()));
+      const isConversation = modeSelect.value === 'chat';
       const history = chatMessages.slice(-12);
       appendEvent({ status: 'user', title: 'You', phase: 'task', message: prompt.value });
       if (isConversation) chatMessages.push({ role: 'user', content: prompt.value });
@@ -1252,6 +1287,12 @@ function webviewHtml(): string {
         setRunning(data.running);
       } else if (data.type === 'agentEvent') {
         appendEvent(data.event);
+      } else if (data.type === 'agentRoute') {
+        const decision = data.decision || {};
+        appendEvent({ status: decision.intent === 'CLARIFY' ? 'info' : 'success', title: 'Auto Agent → ' + (decision.intent || 'CLARIFY'), phase: 'system', message: decision.rationale || 'Intent route selected.' });
+        if ((decision.target === 'chat' || decision.target === 'clarify') && data.prompt) {
+          chatMessages.push({ role: 'user', content: data.prompt });
+        }
       } else if (data.type === 'chatResponse') {
         chatMessages.push({ role: 'assistant', content: data.message });
         appendEvent({ status: 'assistant', title: 'Forge', phase: 'chat', message: data.message });

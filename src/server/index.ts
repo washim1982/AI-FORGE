@@ -3,7 +3,7 @@ import type { Server } from "node:http";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import express, { type Express } from "express";
-import type { AgentDecisionRequest, AgentRunRequest, ChatRequest, ProviderConfig } from "../shared/types.js";
+import type { AgentDecisionRequest, AgentRouteRequest, AgentRunRequest, ChatRequest, ProviderConfig } from "../shared/types.js";
 import { recoverInterruptedPromotions, resumeAgentLoop, runAgentLoop, runAgentLoopV2 } from "./agent.js";
 import {
   buildContextPack,
@@ -14,6 +14,7 @@ import {
   summarizeStore,
 } from "./context-store.js";
 import { CONTEXT_PROFILE_TOKENS, isContextProfileName } from "./model-profile.js";
+import { resolveAgentIntent } from "./intent-router.js";
 import { chatWithLocalModel, discoverLocalRuntimes, listLocalModels } from "./providers.js";
 import { listRunManifests, readRunManifest, recoverInterruptedRuns } from "./run-store.js";
 import { readProjectScripts, readWorkspaceStatus, runProjectCheck, searchWorkspace } from "./workbench.js";
@@ -386,6 +387,31 @@ export async function createApiApp(): Promise<Express> {
     } catch (error) {
       finished = true;
       if (!response.writableEnded && !response.destroyed) response.status(502).json({ error: errorMessage(error) });
+    }
+  });
+
+  app.post("/api/agent/route", async (request, response) => {
+    const body = request.body as Partial<AgentRouteRequest>;
+    if (typeof body.prompt !== "string" || !body.prompt.trim()) {
+      response.status(400).json({ error: "A prompt is required for Auto Agent routing." });
+      return;
+    }
+    if (body.provider !== undefined && !isProviderConfig(body.provider)) {
+      response.status(400).json({ error: "The Auto Agent classifier requires a valid local-model configuration." });
+      return;
+    }
+    const controller = new AbortController();
+    let finished = false;
+    response.on("close", () => {
+      if (!finished) controller.abort();
+    });
+    try {
+      const decision = await resolveAgentIntent(body.prompt.trim(), body.provider, controller.signal);
+      finished = true;
+      if (!response.writableEnded && !response.destroyed) response.json({ decision });
+    } catch (error) {
+      finished = true;
+      if (!response.writableEnded && !response.destroyed) response.status(500).json({ error: errorMessage(error) });
     }
   });
 

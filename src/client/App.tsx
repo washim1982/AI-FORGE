@@ -33,12 +33,14 @@ import {
 import type { editor } from "monaco-editor";
 import { AgentPanel, type ForgeChatMessage } from "./AgentPanel";
 import { EDITOR_THEME, useSystemTheme } from "./theme";
-import { createWorkspaceEntry, deleteWorkspaceEntry, fetchFile, fetchModels, fetchRuntimes, fetchTree, fetchWorkspaceStatus, renameWorkspaceEntry, saveFile, sendChat, streamAgentDecision, streamAgentRun } from "./api";
+import { createWorkspaceEntry, deleteWorkspaceEntry, fetchFile, fetchModels, fetchRuntimes, fetchTree, fetchWorkspaceStatus, renameWorkspaceEntry, reviewWorkspace, routeAgentPrompt, saveFile, sendChat, streamAgentDecision, streamAgentRun } from "./api";
 import { PanelResizer } from "./PanelResizer";
 import { TerminalView } from "./TerminalView";
 import { WorkbenchPanel, type WorkbenchView } from "./WorkbenchPanel";
 import type {
   AgentEvent,
+  AgentExecutionTarget,
+  AgentRouteDecision,
   ProviderConfig,
   ProviderKind,
   RuntimeStatus,
@@ -305,7 +307,8 @@ export default function App() {
   const [retryGuidance, setRetryGuidance] = useState<string | null>(null);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [chatMessages, setChatMessages] = useState<ForgeChatMessage[]>([]);
-  const [agentMode, setAgentMode] = useState<"chat" | "agent">("chat");
+  const [agentMode, setAgentMode] = useState<"auto" | "chat" | "agent">("auto");
+  const [routeDecision, setRouteDecision] = useState<AgentRouteDecision>();
   const [agentError, setAgentError] = useState<string>();
   const [running, setRunning] = useState(false);
   const [runtimes, setRuntimes] = useState<RuntimeStatus[]>([]);
@@ -573,29 +576,52 @@ export default function App() {
     setRunning(true);
     setAgentError(undefined);
     const prompt = task.trim();
-    if (agentMode === "chat") {
-      const userMessage: ForgeChatMessage = { id: crypto.randomUUID(), role: "user", content: prompt, timestamp: new Date().toISOString() };
-      setChatMessages((current) => [...current, userMessage]);
-      setTask("");
-      try {
-        const answer = await sendChat(prompt, config, chatMessages.map(({ role, content }) => ({ role, content })), controller.signal);
-        setChatMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content: answer, timestamp: new Date().toISOString() }]);
-      } catch (error) {
-        if (!(error instanceof DOMException && error.name === "AbortError")) {
-          const message = error instanceof Error ? error.message : "The local model response failed.";
-          setAgentError(message);
-          setChatMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content: `### Local model error\n\n${message}\n\nOpen **Settings**, refresh discovery, and confirm the selected model is loaded.`, timestamp: new Date().toISOString() }]);
-        }
-      } finally {
-        setRunning(false);
-        controllerRef.current = undefined;
-      }
-      return;
-    }
-    setEvents([]);
-    setRunObjective(prompt);
     setTask("");
+    let target: AgentExecutionTarget = agentMode === "chat" ? "chat" : "agent";
+    let resolvedDecision: AgentRouteDecision | undefined;
     try {
+      if (agentMode === "auto") {
+        setRouteDecision(undefined);
+        const decision = await routeAgentPrompt(prompt, config, controller.signal);
+        resolvedDecision = decision;
+        setRouteDecision(decision);
+        target = decision.target;
+      } else {
+        setRouteDecision(undefined);
+      }
+
+      if (target === "clarify") {
+        const now = new Date().toISOString();
+        setEvents([]);
+        setRunObjective("");
+        setChatMessages((current) => [
+          ...current,
+          { id: crypto.randomUUID(), role: "user", content: prompt, timestamp: now },
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: `### Clarification needed\n\n${resolvedDecision?.question || "Should Forge modify files, diagnose a failure, review the workspace, or only explain?"}`,
+            timestamp: now,
+          },
+        ]);
+        return;
+      }
+
+      if (target === "chat" || target === "review") {
+        const userMessage: ForgeChatMessage = { id: crypto.randomUUID(), role: "user", content: prompt, timestamp: new Date().toISOString() };
+        setEvents([]);
+        setRunObjective("");
+        setChatMessages((current) => [...current, userMessage]);
+        const answer = target === "review"
+          ? (await reviewWorkspace(prompt, config, controller.signal)).message
+          : await sendChat(prompt, config, chatMessages.map(({ role, content }) => ({ role, content })), controller.signal);
+        setChatMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content: answer, timestamp: new Date().toISOString() }]);
+        return;
+      }
+
+      setChatMessages([]);
+      setEvents([]);
+      setRunObjective(prompt);
       await streamAgentRun({ prompt, provider: config, maxRepairCycles: 1, maxReplans: 1, maxTasks: 6, architecture: "v2" }, (agentEvent) => {
         setEvents((current) => [...current, agentEvent]);
         if (agentEvent.kind === "promotion.complete") {
@@ -605,7 +631,16 @@ export default function App() {
       }, controller.signal);
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError")) {
-        setAgentError(error instanceof Error ? error.message : "Agent stream failed.");
+        const message = error instanceof Error ? error.message : "Auto Agent request failed.";
+        setAgentError(message);
+        if (target === "chat" || target === "review") {
+          setChatMessages((current) => [...current, {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: `### Local model error\n\n${message}\n\nOpen **Settings**, refresh discovery, and confirm the selected model is loaded.`,
+            timestamp: new Date().toISOString(),
+          }]);
+        }
       }
     } finally {
       setRunning(false);
@@ -847,6 +882,7 @@ export default function App() {
               objective={runObjective}
               messages={chatMessages}
               mode={agentMode}
+              routeDecision={routeDecision}
               running={running}
               config={config}
               task={task}
@@ -858,9 +894,9 @@ export default function App() {
               onOpenSettings={() => { setSettingsOpen(true); void refreshRuntimes(); }}
               onProviderChange={switchProvider}
               onModelChange={switchModel}
-              onModeChange={setAgentMode}
+              onModeChange={(mode) => { setAgentMode(mode); setRouteDecision(undefined); }}
               onRefreshModels={() => void refreshRuntimes()}
-              onNewSession={() => { if (!running) { setEvents([]); setChatMessages([]); setAgentError(undefined); setTask(""); setRunObjective(""); } }}
+              onNewSession={() => { if (!running) { setEvents([]); setChatMessages([]); setRouteDecision(undefined); setAgentError(undefined); setTask(""); setRunObjective(""); } }}
               onDecision={(decision) => {
                 if (decision === "retry") {
                   setRetryGuidance("Address the reported diagnostics without widening the requested scope.");
